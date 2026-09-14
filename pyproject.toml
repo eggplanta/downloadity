@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "downloadity"
 version = "0.1.0"
-description = "A minimalist mobile app to download music and videos from ANYWHERE!!!"
+description = "A minimalist mobile app to download music and videos from anywhere (including Spotify)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -13,7 +13,8 @@ authors = [
     { name = "eggplanta" }
 ]
 dependencies = [
-    "yt-dlp"
+    "yt-dlp",
+    "spotifyscraper"
 ]
 
 [tool.setuptools.packages.find]
