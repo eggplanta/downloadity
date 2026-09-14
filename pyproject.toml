@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "downloadity"
+version = "0.1.0"
+description = "A minimalist mobile app to download music and videos from ANYWHERE!!!"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "eggplanta" }
+]
+dependencies = [
+    "yt-dlp"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
