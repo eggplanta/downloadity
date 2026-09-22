@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from time import perf_counter
 
 from downloadity.extractor import extract
@@ -86,9 +87,14 @@ if mode not in ("a", "v"):
 
 start = perf_counter()
 
-for track_url in urls_to_process:
-    result = download_one(track_url, mode)
-    print(result)
+with ThreadPoolExecutor(max_workers=3) as executor:
+    results = executor.map(
+        lambda track_url: download_one(track_url, mode),
+        urls_to_process,
+    )
+
+    for result in results:
+        print(result)
 
 elapsed = perf_counter() - start
 

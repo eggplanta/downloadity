@@ -35,8 +35,8 @@ _YDL_SEARCH_OPTS = {
 # Score weights higher score = better candidate
 _POSITION_POINTS = (5.0, 4.0, 3.0, 2.0, 1.0)
 _TOPIC_BONUS = 4.0
-_OFFICIAL_AUDIO_BONUS = 3.0
-_REPEATED_QUERY_BONUS = 1.0
+_OFFICIAL_AUDIO_BONUS = 4.0
+_REPEATED_QUERY_BONUS = 2.0
 _ALTERNATE_VERSION_PENALTY = 5.0
 
 @dataclass
@@ -47,21 +47,14 @@ class _SpotifyTrack:
 
     @property
     def search_queries(self) -> list[tuple[str, str]]:
-        """
-        Return (query_type, query) pairs.
-
-        The three searches intentionally overlap because appearing in more
-        than one search is useful evidence when scoring a candidate.
-        """
-        artists = ", ".join(self.artists)
         title = _clean_search_text(self.title)
-        base = f"{artists} - {title}"
+        artist = _clean_search_text(self.artists[0])
+
+        base = f"{artist} - {title}"
 
         return [
-            ("artist_title", base),
-            ("title_artist", f"{self.title} - {artists}"),
-            ("topic", f"{base} Topic"),
-            ("official_audio", f"{base} Official Audio"),
+        ("topic", f"{base} Topic"),
+        ("official_audio", f"{base} Official Audio"),
         ]
 
 
@@ -259,6 +252,7 @@ def _has_alternate_version_marker(title: str) -> bool:
             r"8d|"
             r"reaction|"
             r"mashup"
+            r"sub(?:title)?s?"
             r")\b",
             lowered,
         )
@@ -341,12 +335,8 @@ def _score_candidate(
 
     repeated_queries = len(candidate.query_types)
 
-    if repeated_queries >= 2:
+    if repeated_queries == 2:
         score += _REPEATED_QUERY_BONUS
-
-    if repeated_queries >= 3:
-        score += _REPEATED_QUERY_BONUS
-
 
     if (
         _has_alternate_version_marker(candidate.title)
@@ -377,7 +367,7 @@ def _collect_candidates(track: _SpotifyTrack) -> list[_Candidate]:
     """
     candidates: dict[str, _Candidate] = {}
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=2) as executor:
         results = executor.map(
             _search_query,
             track.search_queries,
@@ -527,9 +517,7 @@ def extract_playlist(
 def _resolve_all(tracks: list[_SpotifyTrack]) -> list[str]:
     """
     Resolve tracks one by one.
-
-    Each track is isolated: a failed YouTube search does not abort the whole
-    album/playlist.
+    A failed YouTube search does not abort the whole album/playlist.
     """
     urls = []
 

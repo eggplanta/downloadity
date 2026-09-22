@@ -80,6 +80,7 @@ def _extract_item(info: dict) -> dict:
         "webpage_url": info.get("webpage_url"),
         "audio": _get_audio_formats(formats),
         "video": _get_video_formats(formats),
+        "ytdlp_info": info,
     }
 
 

@@ -17,8 +17,8 @@ def download_audio(
         "format": quality.format_id,
         "outtmpl": outtmpl,
 
-        "retries": 5,
-        "fragment_retries": 5,
+        "retries": 3,
+        "fragment_retries": 3,
         "retry_sleep_functions": {
             "http": lambda n: min(2 ** (n - 1), 20),
             "fragment": lambda n: min(2 ** (n - 1), 20),
@@ -54,8 +54,8 @@ def download_video(
         "outtmpl": outtmpl,
         "merge_output_format": "mp4",
 
-        "retries": 5,
-        "fragment_retries": 5,
+        "retries": 3,
+        "fragment_retries": 3,
         "retry_sleep_functions": {
             "http": lambda n: min(2 ** (n - 1), 20),
             "fragment": lambda n: min(2 ** (n - 1), 20),
@@ -84,6 +84,8 @@ def _run_download(
 
         except yt_dlp.utils.DownloadError as e:
             last_error = str(e)
+            print(f"Download attempt {attempt + 1}/{max_retries + 1} failed: {last_error}")
+
             if attempt < max_retries:
                 continue
 
