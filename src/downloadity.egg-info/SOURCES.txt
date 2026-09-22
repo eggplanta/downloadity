@@ -13,3 +13,4 @@ src/downloadity.egg-info/requires.txt
 src/downloadity.egg-info/top_level.txt
 tests/test_extractor.py
 tests/test_general.py
+tests/test_spotify.py
