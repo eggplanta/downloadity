@@ -4,9 +4,11 @@ import yt_dlp
 from .formats import AudioQuality, VideoQuality
 
 
-# Public functions
-
-def download_audio(url: str, quality: AudioQuality, output_dir: str = ".") -> dict:
+def download_audio(
+    url: str,
+    quality: AudioQuality,
+    output_dir: str = ".",
+) -> dict:
     outtmpl = os.path.join(output_dir, "%(title)s.%(ext)s")
 
     options = {
@@ -14,6 +16,14 @@ def download_audio(url: str, quality: AudioQuality, output_dir: str = ".") -> di
         "no_warnings": True,
         "format": quality.format_id,
         "outtmpl": outtmpl,
+
+        "retries": 5,
+        "fragment_retries": 5,
+        "retry_sleep_functions": {
+            "http": lambda n: min(2 ** (n - 1), 20),
+            "fragment": lambda n: min(2 ** (n - 1), 20),
+        },
+
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
@@ -23,10 +33,18 @@ def download_audio(url: str, quality: AudioQuality, output_dir: str = ".") -> di
         ],
     }
 
-    return _run_download(url, options, final_ext="mp3")
+    return _run_download(
+        url,
+        options,
+        final_ext="mp3",
+    )
 
 
-def download_video(url: str, quality: VideoQuality, output_dir: str = ".") -> dict:
+def download_video(
+    url: str,
+    quality: VideoQuality,
+    output_dir: str = ".",
+) -> dict:
     outtmpl = os.path.join(output_dir, "%(title)s.%(ext)s")
 
     options = {
@@ -35,33 +53,65 @@ def download_video(url: str, quality: VideoQuality, output_dir: str = ".") -> di
         "format": quality.download_format_id,
         "outtmpl": outtmpl,
         "merge_output_format": "mp4",
+
+        "retries": 5,
+        "fragment_retries": 5,
+        "retry_sleep_functions": {
+            "http": lambda n: min(2 ** (n - 1), 20),
+            "fragment": lambda n: min(2 ** (n - 1), 20),
+        },
     }
 
-    return _run_download(url, options, final_ext="mp4")
+    return _run_download(
+        url,
+        options,
+        final_ext="mp4",
+    )
 
 
-# Internal helpers
+def _run_download(
+    url: str,
+    options: dict,
+    final_ext: str,
+    max_retries: int = 2,
+) -> dict:
+    last_error = None
 
-def _run_download(url: str, options: dict, final_ext: str) -> dict:
-    try:
-        with yt_dlp.YoutubeDL(options) as ydl:
-            info = ydl.extract_info(url, download=True)
-    except yt_dlp.utils.DownloadError as e:
+    for attempt in range(max_retries + 1):
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                current_info = ydl.extract_info(url, download=True)
+
+        except yt_dlp.utils.DownloadError as e:
+            last_error = str(e)
+            if attempt < max_retries:
+                continue
+
+            return {
+                "success": False,
+                "error": last_error,
+            }
+
+        filepath = _resolve_output_path(ydl, current_info, final_ext)
+
         return {
-            "success": False,
-            "error": str(e),
+            "success": True,
+            "filepath": filepath,
+            "title": current_info.get("title"),
         }
 
-    filepath = _resolve_output_path(ydl, info, final_ext)
-
     return {
-        "success": True,
-        "filepath": filepath,
-        "title": info.get("title"),
+        "success": False,
+        "error": last_error,
     }
 
 
-def _resolve_output_path(ydl: yt_dlp.YoutubeDL, info: dict, final_ext: str) -> str:
+def _resolve_output_path(
+    ydl: yt_dlp.YoutubeDL,
+    info: dict,
+    final_ext: str,
+) -> str:
     raw_path = ydl.prepare_filename(info)
     base, _ = os.path.splitext(raw_path)
+
     return f"{base}.{final_ext}"
