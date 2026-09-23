@@ -32,7 +32,7 @@ _YDL_SEARCH_OPTS = {
     "skip_download": True,
 }
 
-# Score weights higher score = better candidate
+# Score weights: higher score = better candidate
 _POSITION_POINTS = (5.0, 4.0, 3.0, 2.0, 1.0)
 _TOPIC_BONUS = 4.0
 _OFFICIAL_AUDIO_BONUS = 4.0
@@ -107,10 +107,8 @@ def _search_candidates(query: str) -> list[dict]:
 
 def _normalize_text(text: str) -> str:
     """
-    Normalize text for comparisons.
-
-    This removes accents, punctuation and common YouTube metadata words so
-    that e.g. 'Epitaph (Official Audio)' is still close to 'Epitaph'.
+    Normalize text for comparisons
+    This removes accents, punctuation and common YouTube metadata words
     """
     text = unicodedata.normalize("NFKD", text)
     text = "".join(char for char in text if not unicodedata.combining(char))
@@ -152,11 +150,8 @@ def _tokens(text: str) -> set[str]:
 
 def _token_similarity(a: str, b: str) -> float:
     """
-    Token overlap using Jaccard similarity.
-
-    Word order does not matter, which is useful for:
-        Artist - Title
-        Title - Artist
+    Token overlap using Jaccard similarity
+    Word order does not matter
     """
     a_tokens = _tokens(a)
     b_tokens = _tokens(b)
@@ -169,7 +164,7 @@ def _token_similarity(a: str, b: str) -> float:
 
 def _sequence_similarity(a: str, b: str) -> float:
     """
-    Character similarity as a secondary signal.
+    Character similarity as a secondary signal
     """
     from difflib import SequenceMatcher
 
@@ -184,10 +179,7 @@ def _sequence_similarity(a: str, b: str) -> float:
 
 def _title_similarity(track: _SpotifyTrack, candidate_title: str) -> float:
     """
-    Compare the Spotify title with the YouTube title.
-
-    Token similarity gets most of the weight; character similarity helps with
-    small spelling differences.
+    Compare the Spotify title with the YouTube title
     """
     token_score = _token_similarity(track.title, candidate_title)
     sequence_score = _sequence_similarity(track.title, candidate_title)
@@ -197,7 +189,7 @@ def _title_similarity(track: _SpotifyTrack, candidate_title: str) -> float:
 
 def _artist_similarity(track: _SpotifyTrack, candidate_title: str, channel: str) -> float:
     """
-    Check whether Spotify artists appear in the YouTube title/channel.
+    Check whether Spotify artists appear in the YouTube title/channel
     """
     candidate_text = _normalize_text(f"{candidate_title} {channel}")
 
@@ -253,6 +245,7 @@ def _has_alternate_version_marker(title: str) -> bool:
             r"reaction|"
             r"mashup"
             r"sub(?:title)?s?"
+            r"acoustic|"
             r")\b",
             lowered,
         )
@@ -261,10 +254,7 @@ def _has_alternate_version_marker(title: str) -> bool:
 
 def _duration_score(candidate: float, target: float) -> float:
     """
-    Convert duration difference into points.
-
-    Small differences are treated as strong evidence. Larger differences
-    gradually stop contributing instead of completely dominating the score.
+    Convert duration difference into points
     """
     difference = abs(candidate - target)
 
@@ -348,7 +338,9 @@ def _score_candidate(
 
 
 def _search_query(item: tuple[str, str]) -> tuple[str, list[dict]]:
-    """Run one YouTube search and return its type together with the entries."""
+    """
+    Run one YouTube search and return its type together with the entries
+    """
     query_type, query = item
 
     try:
@@ -360,10 +352,7 @@ def _search_query(item: tuple[str, str]) -> tuple[str, list[dict]]:
 
 def _collect_candidates(track: _SpotifyTrack) -> list[_Candidate]:
     """
-    Run the four searches in parallel and merge duplicate YouTube videos.
-
-    A video appearing in multiple searches is represented by one Candidate
-    containing all its query types and positions.
+    Run the n searches in parallel and merge duplicate YouTube videos
     """
     candidates: dict[str, _Candidate] = {}
 
@@ -420,10 +409,7 @@ def _rank_candidates(
     track: _SpotifyTrack,
 ) -> list[tuple[float, _Candidate]]:
     """
-    Return all candidates sorted from highest to lowest score.
-
-    Keeping the full ranking makes it possible to inspect/debug the matcher
-    without changing the extraction API.
+    Return all candidates sorted from highest to lowest score
     """
     candidates = _collect_candidates(track)
 
@@ -444,7 +430,9 @@ def _rank_candidates(
 
 
 def _best_match_url(track: _SpotifyTrack) -> Optional[str]:
-    """Return the URL of the highest-scoring YouTube candidate."""
+    """
+    Return the URL of the best candidate
+    """
     ranked = _rank_candidates(track)
 
     if not ranked:
@@ -455,9 +443,7 @@ def _best_match_url(track: _SpotifyTrack) -> Optional[str]:
 
 def debug_match(track: _SpotifyTrack, limit: int = 10) -> None:
     """
-    Print the top matching candidates for manual testing/debugging.
-
-    This does not change the normal extract() API.
+    Print the top matching candidates for manual testing/debugging
     """
     ranked = _rank_candidates(track)
 
@@ -488,13 +474,17 @@ def debug_match(track: _SpotifyTrack, limit: int = 10) -> None:
 
 
 def extract_track(url: str) -> Optional[str]:
-    """Return the matching YouTube URL for one Spotify track."""
+    """
+    Return the matching YouTube URL for one Spotify track
+    """
     data = _spotify_client().get_track(url)
     return _best_match_url(_track_from_data(data))
 
 
 def extract_album(url: str) -> list[str]:
-    """Return matching YouTube URLs for every track in a Spotify album."""
+    """
+    Return matching YouTube URLs for every track in a Spotify album
+    """
     album = _spotify_client().get_album(url)
     return _resolve_all(_safe_convert(album.tracks))
 
@@ -503,7 +493,9 @@ def extract_playlist(
     url: str,
     max_tracks: Optional[int] = NO_TRACK_LIMIT,
 ) -> list[str]:
-    """Return matching YouTube URLs for every track in a Spotify playlist."""
+    """
+    Return matching YouTube URLs for every track in a Spotify playlist
+    """
     playlist = _spotify_client().get_playlist(
         url,
         max_tracks=max_tracks,
@@ -516,8 +508,7 @@ def extract_playlist(
 
 def _resolve_all(tracks: list[_SpotifyTrack]) -> list[str]:
     """
-    Resolve tracks one by one.
-    A failed YouTube search does not abort the whole album/playlist.
+    Resolve tracks one by one
     """
     urls = []
 
@@ -537,12 +528,7 @@ def extract(
     url: str,
     max_tracks: Optional[int] = NO_TRACK_LIMIT,
 ) -> list[str]:
-    """
-    Supported Spotify URL types:
-    - /track/
-    - /album/
-    - /playlist/
-    """
+
     if "/track/" in url:
         match = extract_track(url)
         return [match] if match else []
