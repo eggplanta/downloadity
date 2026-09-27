@@ -1,4 +1,5 @@
 import yt_dlp
+from . import spotify
 
 
 def extract(url: str, flat: bool = False) -> dict:
@@ -21,7 +22,7 @@ def extract(url: str, flat: bool = False) -> dict:
     if info is None:
         return {
             "type": "error",
-            "message": "Não foi possível extrair informações dessa URL.",
+            "message": "Could not extract information from this URL.",
         }
 
     # Playlist
@@ -56,6 +57,35 @@ def extract(url: str, flat: bool = False) -> dict:
         **_extract_item(info),
     }
 
+def resolve(url: str) -> dict:
+
+    if "open.spotify.com" in url:
+        youtube_urls = spotify.extract(url)
+
+        if not youtube_urls:
+            return {
+                "type": "error",
+                "message": "Could not extract information from this URL.",
+            }
+
+        if len(youtube_urls) > 1:
+            return _playlist_from_urls(youtube_urls)
+
+        url = youtube_urls[0]
+
+    return extract(url, flat=True)
+
+
+def _playlist_from_urls(urls: list[str]) -> dict:
+    return {
+        "type": "playlist",
+        "title": None,
+        "count": len(urls),
+        "entries": [
+            {"id": None, "title": None, "url": u, "duration": None}
+            for u in urls
+        ],
+    }
 
 def _extract_flat_item(info: dict) -> dict:
 
