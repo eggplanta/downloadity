@@ -1,5 +1,5 @@
 import yt_dlp
-from . import spotify
+from .spotify import SpotifyClient
 
 
 def extract(url: str, flat: bool = False) -> dict:
@@ -57,23 +57,33 @@ def extract(url: str, flat: bool = False) -> dict:
         **_extract_item(info),
     }
 
-def resolve(url: str) -> dict:
+def is_downloadable(url: str) -> bool:
+    if not url or not url.strip():
+        return False
 
-    if "open.spotify.com" in url:
-        youtube_urls = spotify.extract(url)
+    url = url.strip()
 
-        if not youtube_urls:
-            return {
-                "type": "error",
-                "message": "Could not extract information from this URL.",
-            }
+    if "spotify.com" in url:
+        try:
+            with SpotifyClient() as client:
+                if "/track/" in url:
+                    return client.get_track(url) is not None
+                elif "/playlist/" in url:
+                    return client.get_playlist(url, max_tracks=1) is not None
+                return False
+        except Exception:
+            return False
 
-        if len(youtube_urls) > 1:
-            return _playlist_from_urls(youtube_urls)
-
-        url = youtube_urls[0]
-
-    return extract(url, flat=True)
+    try:
+        with yt_dlp.YoutubeDL({
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "noplaylist": True,
+        }) as ydl:
+            return bool(ydl.extract_info(url, download=False))
+    except Exception:
+        return False
 
 
 def _playlist_from_urls(urls: list[str]) -> dict:
