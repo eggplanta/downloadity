@@ -1,13 +1,22 @@
+"""
+Shows the YouTube match of each Spotify track
+Usage: test_spotify.py [url]
+"""
+import sys
+from time import perf_counter
+
+import paths  # noqa: F401
 from downloadity import spotify
 
-url = input("Paste the Spotify playlist link: ")
+url = sys.argv[1] if len(sys.argv) > 1 else input("Paste the Spotify link: ")
 
-playlist = spotify._spotify_client().get_playlist(url)
-tracks = spotify._safe_convert(pt.track for pt in playlist.tracks)
+name, tracks = spotify.get_collection(url)
+print(f"{name or 'track'}: {len(tracks)} track(s)\n")
 
-index = int(input("Which track index was wrong? "))
-spotify.debug_match(tracks[index])
-track = tracks[index]
+for index, track in enumerate(tracks, start=1):
+    start = perf_counter()
+    match = spotify.best_match_url(track)
+    elapsed = perf_counter() - start
 
-artists = ", ".join(track.artists)
-print(f"Search this on YouTube: {artists} - {track.title}")
+    print(f"{index}. {', '.join(track.artists)} - {track.title}")
+    print(f"   {match or 'no match'} ({elapsed:.1f}s)")

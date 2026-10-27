@@ -1,18 +1,45 @@
 import yt_dlp
-from .spotify import SpotifyClient
+from .throttle import throttle
+
+AUDIO_BITRATES = (32, 48, 64, 96, 128, 160, 192, 256, 320)
+
+# height -> long side of a 16:9 frame
+VIDEO_LONG_SIDES = {
+    144: 256,
+    240: 426,
+    360: 640,
+    480: 854,
+    720: 1280,
+    1080: 1920,
+    1440: 2560,
+    2160: 3840,
+    4320: 7680,
+}
 
 
-def extract(url: str, flat: bool = False) -> dict:
+class SilentLogger:
+    # Errors are returned, not printed
+    def debug(self, msg):
+        pass
+
+    warning = error = debug
+
+
+def extract(url: str, flat: str | bool = False) -> dict:
+    """
+    Single media comes with formats
+    Playlists need flat="in_playlist"
+    """
     options = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "extract_flat": flat,
+        "logger": SilentLogger(),
     }
 
     try:
-        with yt_dlp.YoutubeDL(options) as ydl:
-            info = ydl.extract_info(url, download=False)
+        info = throttle.run(lambda: _extract_info(url, options))
     except yt_dlp.utils.DownloadError as e:
         return {
             "type": "error",
@@ -33,98 +60,50 @@ def extract(url: str, flat: bool = False) -> dict:
             if not entry:
                 continue
 
-            if flat:
-                entries.append(_extract_flat_item(entry))
-            else:
-                entries.append(_extract_item(entry))
+            entries.append(_extract_flat_item(entry))
 
         return {
             "type": "playlist",
             "title": info.get("title"),
-            "count": len(entries),
             "entries": entries,
         }
 
     # Single Media
-    if flat:
-        return {
-            "type": "video",
-            **_extract_flat_item(info),
-        }
-
     return {
         "type": "video",
         **_extract_item(info),
     }
 
-def is_downloadable(url: str) -> bool:
-    if not url or not url.strip():
-        return False
 
-    url = url.strip()
+def _extract_info(url: str, options: dict) -> dict:
+    with yt_dlp.YoutubeDL(options) as ydl:
+        return ydl.extract_info(url, download=False)
 
-    if "spotify.com" in url:
-        try:
-            with SpotifyClient() as client:
-                if "/track/" in url:
-                    return client.get_track(url) is not None
-                elif "/playlist/" in url:
-                    return client.get_playlist(url, max_tracks=1) is not None
-                return False
-        except Exception:
-            return False
-
-    try:
-        with yt_dlp.YoutubeDL({
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
-            "noplaylist": True,
-        }) as ydl:
-            return bool(ydl.extract_info(url, download=False))
-    except Exception:
-        return False
-
-
-def _playlist_from_urls(urls: list[str]) -> dict:
-    return {
-        "type": "playlist",
-        "title": None,
-        "count": len(urls),
-        "entries": [
-            {"id": None, "title": None, "url": u, "duration": None}
-            for u in urls
-        ],
-    }
 
 def _extract_flat_item(info: dict) -> dict:
 
     return {
-        "id": info.get("id"),
         "title": info.get("title"),
         "url": info.get("url") or info.get("webpage_url"),
         "duration": info.get("duration"),
+        "availability": info.get("availability"),
     }
 
 
 def _extract_item(info: dict) -> dict:
 
     formats = info.get("formats", [])
+    duration = info.get("duration")
 
     return {
-        "id": info.get("id"),
-        "title": info.get("title"),
-        "uploader": info.get("uploader"),
-        "duration": info.get("duration"),
-        "thumbnail": info.get("thumbnail"),
-        "webpage_url": info.get("webpage_url"),
-        "audio": _get_audio_formats(formats),
-        "video": _get_video_formats(formats),
+        "duration": duration,
+        "audio": _get_audio_formats(formats, duration),
+        "video": _get_video_formats(formats, duration),
         "ytdlp_info": info,
     }
 
 
-def _get_audio_formats(formats: list) -> list:
+def _get_audio_formats(formats: list, duration) -> list:
 
     best_by_bitrate = {}
 
@@ -132,18 +111,18 @@ def _get_audio_formats(formats: list) -> list:
         if fmt.get("vcodec") != "none":
             continue
 
-        bitrate = fmt.get("abr")
-        if not bitrate:
+        abr = fmt.get("abr")
+        if not abr:
             continue
 
-        bitrate = round(bitrate)
+        bitrate = _standard_bitrate(abr)
 
         existing = best_by_bitrate.get(bitrate)
         if existing is None:
             best_by_bitrate[bitrate] = fmt
         else:
-            existing_size = existing.get("filesize") or existing.get("filesize_approx") or 0
-            new_size = fmt.get("filesize") or fmt.get("filesize_approx") or 0
+            existing_size = _filesize(existing, duration) or 0
+            new_size = _filesize(fmt, duration) or 0
             if new_size and (not existing_size or new_size < existing_size):
                 best_by_bitrate[bitrate] = fmt
 
@@ -152,15 +131,14 @@ def _get_audio_formats(formats: list) -> list:
         fmt = best_by_bitrate[bitrate]
         result.append({
             "format_id": fmt.get("format_id"),
-            "ext": fmt.get("ext"),
             "bitrate": bitrate,
-            "filesize": fmt.get("filesize") or fmt.get("filesize_approx"),
+            "filesize": _filesize(fmt, duration),
         })
 
     return result
 
 
-def _get_video_formats(formats: list) -> list:
+def _get_video_formats(formats: list, duration) -> list:
 
     best_by_height = {}
 
@@ -168,29 +146,60 @@ def _get_video_formats(formats: list) -> list:
         if fmt.get("vcodec") == "none":
             continue
 
-        height = fmt.get("height")
-        if not height or height < 144:
+        if not fmt.get("height") or fmt["height"] < 144:
             continue
 
+        height = _standard_height(fmt)
+
+        # Prefer formats that report their size
         existing = best_by_height.get(height)
-        if existing is None:
+        if existing is None or _video_rank(fmt) > _video_rank(existing):
             best_by_height[height] = fmt
-        else:
-            existing_tbr = existing.get("tbr") or 0
-            new_tbr = fmt.get("tbr") or 0
-            if new_tbr > existing_tbr:
-                best_by_height[height] = fmt
 
     result = []
     for height in sorted(best_by_height):
         fmt = best_by_height[height]
         result.append({
             "format_id": fmt.get("format_id"),
-            "ext": fmt.get("ext"),
             "height": height,
-            "resolution": f"{height}p",
             "has_audio": fmt.get("acodec") != "none",
-            "filesize": fmt.get("filesize") or fmt.get("filesize_approx"),
+            "filesize": _filesize(fmt, duration),
         })
 
     return result
+
+
+def _video_rank(fmt: dict) -> tuple:
+    known_size = bool(fmt.get("filesize") or fmt.get("filesize_approx"))
+    return (known_size, fmt.get("tbr") or 0)
+
+
+def _standard_bitrate(abr: float) -> int:
+    return min(AUDIO_BITRATES, key=lambda b: abs(b - abr))
+
+
+def _standard_height(fmt: dict) -> int:
+    width = fmt.get("width")
+    height = fmt["height"]
+
+    if width:
+        long_side = max(width, height)
+        return min(
+            VIDEO_LONG_SIDES,
+            key=lambda h: abs(VIDEO_LONG_SIDES[h] - long_side),
+        )
+
+    return min(VIDEO_LONG_SIDES, key=lambda h: abs(h - height))
+
+
+def _filesize(fmt: dict, duration):
+    size = fmt.get("filesize") or fmt.get("filesize_approx")
+    if size:
+        return size
+
+    # Estimate from total bitrate (kbps)
+    tbr = fmt.get("tbr")
+    if tbr and duration:
+        return int(tbr * 1000 / 8 * duration)
+
+    return None

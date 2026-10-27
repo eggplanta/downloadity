@@ -14,6 +14,8 @@ from spotify_scraper import SpotifyClient
 from spotify_scraper.http.retry import RetryPolicy
 from spotify_scraper.models import Track as SpotifyTrackData
 
+from .throttle import throttle
+
 
 NO_TRACK_LIMIT = None
 
@@ -99,9 +101,11 @@ def _safe_convert(raw_tracks) -> list[_SpotifyTrack]:
 def _search_candidates(query: str) -> list[dict]:
     search = f"ytsearch{_CANDIDATES_PER_QUERY}:{query}"
 
-    with yt_dlp.YoutubeDL(_YDL_SEARCH_OPTS) as ydl:
-        result = ydl.extract_info(search, download=False)
+    def request():
+        with yt_dlp.YoutubeDL(_YDL_SEARCH_OPTS) as ydl:
+            return ydl.extract_info(search, download=False)
 
+    result = throttle.run(request)
     return result.get("entries") or []
 
 
@@ -441,105 +445,26 @@ def _best_match_url(track: _SpotifyTrack) -> Optional[str]:
     return ranked[0][1].url
 
 
-def debug_match(track: _SpotifyTrack, limit: int = 10) -> None:
+def get_collection(url: str) -> tuple[Optional[str], list[_SpotifyTrack]]:
     """
-    Print the top matching candidates for manual testing/debugging
+    Spotify metadata only, no YouTube search
+    Returns (collection name, tracks); name is None for tracks
     """
-    ranked = _rank_candidates(track)
-
-    print()
-    print(f"Spotify: {', '.join(track.artists)} - {track.title}")
-    print(f"Duration: {track.duration_ms / 1000:.0f}s")
-    print()
-    print("Top candidates:")
-
-    for index, (score, candidate) in enumerate(ranked[:limit], start=1):
-        duration = (
-            f"{candidate.duration:.0f}s"
-            if candidate.duration is not None
-            else "unknown"
-        )
-        positions = ", ".join(
-            f"{position + 1}"
-            for position in sorted(candidate.positions)
-        )
-        query_types = ", ".join(sorted(candidate.query_types))
-
-        print(f"{index}. [{score:.2f}] {candidate.title}")
-        print(f"   Channel: {candidate.channel or 'unknown'}")
-        print(f"   Duration: {duration}")
-        print(f"   Positions: {positions}")
-        print(f"   Queries: {query_types}")
-        print(f"   URL: {candidate.url}")
-
-
-def extract_track(url: str) -> Optional[str]:
-    """
-    Return the matching YouTube URL for one Spotify track
-    """
-    data = _spotify_client().get_track(url)
-    return _best_match_url(_track_from_data(data))
-
-
-def extract_album(url: str) -> list[str]:
-    """
-    Return matching YouTube URLs for every track in a Spotify album
-    """
-    album = _spotify_client().get_album(url)
-    return _resolve_all(_safe_convert(album.tracks))
-
-
-def extract_playlist(
-    url: str,
-    max_tracks: Optional[int] = NO_TRACK_LIMIT,
-) -> list[str]:
-    """
-    Return matching YouTube URLs for every track in a Spotify playlist
-    """
-    playlist = _spotify_client().get_playlist(
-        url,
-        max_tracks=max_tracks,
-    )
-
-    return _resolve_all(
-        _safe_convert(pt.track for pt in playlist.tracks)
-    )
-
-
-def _resolve_all(tracks: list[_SpotifyTrack]) -> list[str]:
-    """
-    Resolve tracks one by one
-    """
-    urls = []
-
-    for track in tracks:
-        try:
-            url = _best_match_url(track)
-        except yt_dlp.utils.DownloadError:
-            continue
-
-        if url:
-            urls.append(url)
-
-    return urls
-
-
-def extract(
-    url: str,
-    max_tracks: Optional[int] = NO_TRACK_LIMIT,
-) -> list[str]:
+    client = _spotify_client()
 
     if "/track/" in url:
-        match = extract_track(url)
-        return [match] if match else []
+        return None, [_track_from_data(client.get_track(url))]
 
     if "/album/" in url:
-        return extract_album(url)
+        album = client.get_album(url)
+        return album.name, _safe_convert(album.tracks)
 
     if "/playlist/" in url:
-        return extract_playlist(
-            url,
-            max_tracks=max_tracks,
-        )
+        playlist = client.get_playlist(url, max_tracks=NO_TRACK_LIMIT)
+        return playlist.name, _safe_convert(pt.track for pt in playlist.tracks)
 
     raise ValueError(f"Unsupported Spotify URL: {url}")
+
+
+def best_match_url(track: _SpotifyTrack) -> Optional[str]:
+    return _best_match_url(track)

@@ -1,3 +1,5 @@
+import logging
+import os
 import threading
 
 from kivy.app import App
@@ -9,13 +11,35 @@ from kivy.uix.textinput import TextInput
 from kivy.core.text import Label as CoreLabel
 from kivy.clock import Clock
 from kivy.uix.button import Button
-from kivy.graphics import Color, Line
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.screenmanager import ScreenManager, Screen, NoTransition
+from kivy.uix.modalview import ModalView
+from kivy.uix.floatlayout import FloatLayout
+from kivy.utils import escape_markup, platform
 
-from downloadity.extractor import is_downloadable
+from downloadity.download_queue import DownloadQueue
+from downloadity.media import resolve_media
+from ascii_art import cover_markup
 
 Window.clearcolor = (0, 0, 0, 1)
 
+# Kivy logs third-party debug otherwise
+logging.getLogger().setLevel(logging.WARNING)
+
 version = "v 0.1.0"
+
+LINE_FONT = dp(12)
+CHECKING_FRAMES = ("checking ..", "checking. .", "checking.. ", "checking...")
+
+ART_FONT = dp(8)
+ART_COLS = 60
+GRAY = (0.5, 0.5, 0.5, 1)
+CONTROLS = "⇄    ▮◀    ❚❚    ▶▮    ↻"
+
+if platform == "android":
+    DOWNLOAD_ROOT = "/storage/emulated/0/downloadity"
+else:
+    DOWNLOAD_ROOT = os.path.expanduser("~/Downloads/downloadity")
 
 LOGO = f"""
 ▗▄▖             ▝▜            ▐  ▝   ▗      
@@ -27,14 +51,15 @@ LOGO = f"""
                             {version}  ▝▘
 """
 
-def char_width(char, font_size):
+def char_width(char, font_size, count=50):
+    # Width per char inside a run
     label = CoreLabel(
-        text=char,
+        text=char * count,
         font_name="DejaVuSansMono",
         font_size=font_size,
     )
     label.refresh()
-    return label.texture.size[0]
+    return label.texture.size[0] / count
 
 def line_height(font_size):
     label = CoreLabel(
@@ -45,12 +70,52 @@ def line_height(font_size):
     label.refresh()
     return label.texture.size[1]
 
+def mono_label(text, font_size, **kwargs):
+    kwargs.setdefault("halign", "center")
+    kwargs.setdefault("valign", "middle")
+    kwargs.setdefault("color", (1, 1, 1, 1))
+    return Label(
+        text=text,
+        font_name="DejaVuSansMono",
+        font_size=font_size,
+        **kwargs,
+    )
+
+def vertical_line():
+    lh = line_height(LINE_FONT)
+    label = mono_label(
+        "",
+        LINE_FONT,
+        size_hint_x=None,
+        width=char_width("│", LINE_FONT),
+        valign="top",
+    )
+
+    def redraw(_instance, size):
+        label.text_size = size
+        label.text = "\n".join(["│"] * max(1, int(size[1] / lh)))
+
+    label.bind(size=redraw)
+    return label
+
+def quality_column():
+    column = BoxLayout(
+        orientation="vertical",
+        size_hint_y=None,
+        padding=[0, dp(24), 0, 0],
+        spacing=dp(28),
+    )
+    column.bind(minimum_height=column.setter("height"))
+
+    scroll = ScrollView(do_scroll_x=False)
+    scroll.add_widget(column)
+    return scroll, column
+
 class AsciiButton(Button):
     BORDER_FONT = dp(12)
 
     def __init__(self, label, font_size=dp(15), border=True, rows=None, **kwargs):
         super().__init__(**kwargs)
-        self.label_text = label
         self.show_border = border
         self.rows = rows
         self.background_normal = ""
@@ -75,6 +140,7 @@ class AsciiButton(Button):
             font_size=font_size,
             halign="center",
             valign="middle",
+            markup=True,
         )
 
         self.add_widget(self.border_label)
@@ -115,6 +181,82 @@ class AsciiButton(Button):
         self.border_label.color = c
         self.text_label.color = c
 
+class AsciiPopup(ModalView):
+    def __init__(self, message, buttons, items=None, **kwargs):
+        super().__init__(
+            size_hint=(None, None),
+            size=(dp(320), dp(420) if items else dp(230)),
+            auto_dismiss=False,
+            background="",
+            background_color=(0, 0, 0, 1),
+            overlay_color=(0, 0, 0, 0.75),
+            **kwargs,
+        )
+
+        layout = FloatLayout()
+
+        self.frame = mono_label("", LINE_FONT, pos_hint={"x": 0, "y": 0})
+        self.frame.bind(size=self.redraw_frame)
+        layout.add_widget(self.frame)
+
+        content = BoxLayout(
+            orientation="vertical",
+            padding=[dp(40), dp(28), dp(40), dp(18)],
+            spacing=dp(8),
+            pos_hint={"x": 0, "y": 0},
+        )
+
+        text = mono_label(message, dp(15), markup=True)
+        text.bind(size=text.setter("text_size"))
+        if items:
+            text.size_hint_y = None
+            text.height = dp(40)
+        content.add_widget(text)
+
+        if items:
+            content.add_widget(self.item_list(items))
+
+        row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(16))
+        for label, callback in buttons:
+            button = AsciiButton(escape_markup(f"[ {label} ]"), border=False, font_size=dp(15))
+            button.bind(on_release=lambda _b, cb=callback: self.choose(cb))
+            row.add_widget(button)
+        content.add_widget(row)
+
+        layout.add_widget(content)
+        self.add_widget(layout)
+
+    def item_list(self, items):
+        scroll = ScrollView(bar_width=dp(2), bar_color=GRAY, bar_inactive_color=GRAY)
+        label = mono_label(
+            escape_markup("\n".join(f"- {item}" for item in items)),
+            dp(12),
+            size_hint_y=None,
+            color=GRAY,
+            markup=True,
+            halign="left",
+        )
+        label.bind(
+            width=lambda l, w: setattr(l, "text_size", (w, None)),
+            texture_size=lambda l, s: setattr(l, "height", s[1]),
+        )
+        scroll.add_widget(label)
+        return scroll
+
+    def choose(self, callback):
+        self.dismiss()
+        callback()
+
+    def redraw_frame(self, label, size):
+        cols = int(size[0] / char_width("─", LINE_FONT))
+        rows = int(size[1] / line_height(LINE_FONT))
+        inner = max(0, cols - 2)
+
+        lines = ["┌" + "─" * inner + "┐"]
+        lines += ["│" + " " * inner + "│"] * max(0, rows - 2)
+        lines += ["└" + "─" * inner + "┘"]
+        label.text = "\n".join(lines)
+
 class DownloadityApp(App):
 
     def on_text_change(self, instance, value):
@@ -130,10 +272,10 @@ class DownloadityApp(App):
             ):
                 widget.color = (1, 1, 1, 1)
 
-            self.buttons.height = 0
-            self.buttons.opacity = 0
+            self.show_in_result_area(None)
             return
 
+        self.start_checking()
         self.check_event = Clock.schedule_once(
             lambda dt: threading.Thread(
                 target=self.check_link,
@@ -144,13 +286,21 @@ class DownloadityApp(App):
         )
 
     def check_link(self, url):
-        valid = is_downloadable(url)
+        try:
+            media = resolve_media(url)
+        except Exception:
+            media = None
 
         Clock.schedule_once(
-            lambda dt: self.show_result(valid)
+            lambda dt: self.show_result(url, media)
         )
 
-    def show_result(self, valid):
+    def show_result(self, url, media):
+        if url != self.link_input.text.strip():
+            return
+
+        self.media = media
+        valid = media is not None
         color = (0, 1, 0, 1) if valid else (1, 0, 0, 1)
 
         for widget in (
@@ -161,17 +311,211 @@ class DownloadityApp(App):
         ):
             widget.color = color
 
-        if valid:
-            self.buttons.height = self.download_button.height
-            self.buttons.opacity = 1
-        else:
+        self.show_in_result_area(self.download_button if valid else None)
+
+    def start_checking(self):
+        if self.checking_event:
+            return
+
+        self.checking_frame = 0
+        self.checking_label.text = CHECKING_FRAMES[0]
+        self.show_in_result_area(self.checking_label)
+        self.checking_event = Clock.schedule_interval(self.animate_checking, 0.3)
+
+    def animate_checking(self, dt):
+        self.checking_frame = (self.checking_frame + 1) % len(CHECKING_FRAMES)
+        self.checking_label.text = CHECKING_FRAMES[self.checking_frame]
+
+    def show_in_result_area(self, widget):
+        if widget is not self.checking_label and self.checking_event:
+            self.checking_event.cancel()
+            self.checking_event = None
+
+        self.buttons.clear_widgets()
+
+        if widget is None:
             self.buttons.height = 0
             self.buttons.opacity = 0
+            return
+
+        self.buttons.add_widget(widget)
+        self.buttons.height = widget.height
+        self.buttons.opacity = 1
+
+    def on_download_press(self, *args):
+        options = self.media.options
+
+        has_options = options.audio or options.video
+        self.qualities_status.text = "" if has_options else "no options found"
+        self.fill_quality_column(self.audio_column, "audio", options.audio)
+        self.fill_quality_column(self.video_column, "video", options.video)
+
+        self.screens.current = "qualities"
+
+    def fill_quality_column(self, column, kind, qualities):
+        column.clear_widgets()
+
+        for quality in sorted(qualities, key=lambda q: q.value, reverse=True):
+            text = quality.label
+            if quality.filesize_label:
+                text += f"\n[size={int(dp(14))}]({quality.filesize_label})[/size]"
+
+            button = AsciiButton(
+                text,
+                border=False,
+                size_hint_y=None,
+                height=dp(64),
+                font_size=dp(20),
+            )
+            button.bind(
+                on_release=lambda _b, q=quality: self.on_quality_select(kind, q)
+            )
+            column.add_widget(button)
+
+    def on_quality_select(self, kind, quality):
+        size = quality.filesize_label
+        if size is None:
+            usage = "an unknown amount"
+        elif self.media.is_playlist:
+            usage = f"~{size}"
+        else:
+            usage = size
+
+        AsciiPopup(
+            f"download in {quality.label}?\n\nthis will use {usage}\nof your storage",
+            [
+                ("cancel", lambda: None),
+                ("confirm", lambda: self.confirm_invalid(kind, quality)),
+            ],
+        ).open()
+
+    def confirm_invalid(self, kind, quality):
+        if not self.media.invalid:
+            self.start_download(kind, quality)
+            return
+
+        AsciiPopup(
+            "these items are invalid\nand won't be downloaded:",
+            [("OK", lambda: self.start_download(kind, quality))],
+            items=[e.title or "unknown title" for e in self.media.invalid],
+        ).open()
+
+    #====================DOWNLOAD======================#
+
+    def start_download(self, kind, quality):
+        self.total_items = len(self.media.entries)
+        self.show_item_placeholder()
+        self.screens.current = "downloading"
+
+        self.elapsed = 0
+        self.timer_label.text = "00:00"
+        self.timer_event = Clock.schedule_interval(self.tick_timer, 1)
+
+        queue = DownloadQueue(
+            self.media,
+            kind,
+            quality.value,
+            DOWNLOAD_ROOT,
+            listener=self,
+            prepare_extra=self.make_art,
+        )
+        threading.Thread(target=self.run_queue, args=(queue,), daemon=True).start()
+
+    def run_queue(self, queue):
+        try:
+            queue.run()
+        except Exception as e:
+            error = str(e)
+            Clock.schedule_once(lambda dt: self.show_finished(0, [], queue.output_dir, error))
+
+    def make_art(self, entry):
+        return cover_markup(entry.info["ytdlp_info"], ART_COLS, self.art_rows)
+
+    # Queue listener (worker thread)
+
+    def on_item_start(self, item):
+        Clock.schedule_once(lambda dt: self.show_item(item))
+
+    def on_progress(self, fraction):
+        Clock.schedule_once(lambda dt: self.draw_bar(fraction))
+
+    def on_finished(self, done, failed, folder):
+        Clock.schedule_once(lambda dt: self.show_finished(done, failed, folder))
+
+    # Player screen
+
+    def show_item_placeholder(self):
+        self.art_label.text = self.placeholder_art
+        self.song_label.text = ""
+        self.artist_label.text = ""
+        self.counter_label.text = f"1 / {self.total_items}"
+        self.draw_bar(0)
+
+    def show_item(self, item):
+        self.art_label.text = item.extra or self.placeholder_art
+        self.song_label.text = escape_markup(item.title)
+        self.artist_label.text = escape_markup(item.artist)
+        self.counter_label.text = f"{item.position} / {item.total}"
+        self.draw_bar(0)
+
+    def draw_bar(self, fraction):
+        played = int(fraction * (self.bar_cols - 1))
+        rest = self.bar_cols - 1 - played
+        self.bar_label.text = (
+            f"[color=#ffffff]{'━' * played}●[/color]"
+            f"[color=#555555]{'─' * rest}[/color]"
+        )
+
+    def tick_timer(self, dt):
+        self.elapsed += 1
+        minutes, seconds = divmod(self.elapsed, 60)
+        self.timer_label.text = f"{minutes:02d}:{seconds:02d}"
+
+    def show_finished(self, done, failed, folder, error=None):
+        self.timer_event.cancel()
+        self.draw_bar(1)
+
+        if error:
+            message = f"download failed\n\n{error}"
+        else:
+            message = f"download finished!\n\nyour files are in:\n{folder}"
+
+        after = lambda: self.show_failed(failed) if failed else self.reset_home()
+        AsciiPopup(escape_markup(message), [("OK", after)]).open()
+
+    def show_failed(self, failed):
+        AsciiPopup(
+            f"{len(failed)} item(s) failed:",
+            [("OK", self.reset_home)],
+            items=failed,
+        ).open()
+
+    def reset_home(self):
+        self.media = None
+        self.link_input.text = ""
+        self.screens.current = "home"
 
 
     #======================BUILD=======================#
 
     def build(self):
+        self.screens = ScreenManager(transition=NoTransition())
+
+        home = Screen(name="home")
+        home.add_widget(self.build_home())
+        self.screens.add_widget(home)
+
+        qualities = Screen(name="qualities")
+        qualities.add_widget(self.build_qualities())
+        self.screens.add_widget(qualities)
+
+        downloading = Screen(name="downloading")
+        downloading.add_widget(self.build_downloading())
+        self.screens.add_widget(downloading)
+
+        return self.screens
+
+    def build_home(self):
 
         root = BoxLayout(
             orientation="vertical",
@@ -179,36 +523,8 @@ class DownloadityApp(App):
             spacing=dp(20),
         )
 
-        # top row: espaço à esquerda + botão de destino à direita
-        top_row = BoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=dp(120),
-        )
-
-        top_row.add_widget(Label())
-
-        right_col = BoxLayout(
-            orientation="vertical",
-            size_hint=(None, None),
-            width=dp(300),
-            height=dp(120),
-        )
-
-        self.destination_button = AsciiButton(
-            "change download destination",
-            size_hint=(None, None),
-            height=dp(45),
-            width=dp(300),
-            font_size=dp(15),
-            border=False,
-        )
-
-        right_col.add_widget(self.destination_button)
-        right_col.add_widget(Label())
-
-        top_row.add_widget(right_col)
-        root.add_widget(top_row)
+        # top space
+        root.add_widget(Label(size_hint_y=None, height=dp(120)))
 
         # logo
         logo = Label(
@@ -355,7 +671,15 @@ class DownloadityApp(App):
             rows=7,
         )
 
-        self.buttons.add_widget(self.download_button)
+        self.download_button.bind(on_release=self.on_download_press)
+
+        self.checking_label = mono_label(
+            "",
+            dp(12),
+            size_hint_y=None,
+            height=dp(20),
+        )
+        self.checking_event = None
 
         root.add_widget(self.buttons)
 
@@ -380,6 +704,140 @@ class DownloadityApp(App):
 
         # space
         root.add_widget(Label(size_hint_y=None, height=dp(0)))
+
+        return root
+
+    #====================QUALITIES=====================#
+
+    def build_qualities(self):
+        lh = line_height(LINE_FONT)
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=[dp(20), dp(60), dp(20), dp(20)],
+        )
+
+        header = BoxLayout(size_hint_y=None, height=lh * 3)
+        header.add_widget(mono_label("AUDIO", dp(24)))
+        header.add_widget(vertical_line())
+        header.add_widget(mono_label("VIDEO", dp(24)))
+        root.add_widget(header)
+
+        dash_width = char_width("─", LINE_FONT)
+        divider = mono_label("", LINE_FONT, size_hint_y=None, height=lh)
+
+        def redraw_divider(_instance, width):
+            side = max(1, int((width - dash_width) / 2 / dash_width))
+            divider.text = "─" * side + "┼" + "─" * side
+
+        divider.bind(width=redraw_divider)
+        root.add_widget(divider)
+
+        body = BoxLayout()
+        audio_scroll, self.audio_column = quality_column()
+        video_scroll, self.video_column = quality_column()
+        body.add_widget(audio_scroll)
+        body.add_widget(vertical_line())
+        body.add_widget(video_scroll)
+        root.add_widget(body)
+
+        self.qualities_status = mono_label(
+            "",
+            dp(15),
+            size_hint_y=None,
+            height=dp(30),
+        )
+        root.add_widget(self.qualities_status)
+
+        return root
+
+    #===================DOWNLOADING====================#
+
+    def build_downloading(self):
+        art_cw = char_width("@", ART_FONT)
+        art_lh = line_height(ART_FONT)
+        self.art_rows = max(1, round(ART_COLS * art_cw / art_lh))
+        width = ART_COLS * art_cw
+
+        self.placeholder_art = "[color=#333333]" + "\n".join(["·" * ART_COLS] * self.art_rows) + "[/color]"
+        self.bar_cols = int(width / char_width("━", LINE_FONT))
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=[dp(20), dp(12), dp(20), dp(12)],
+        )
+        root.add_widget(Label())
+
+        column = BoxLayout(
+            orientation="vertical",
+            size_hint=(None, None),
+            width=width,
+            pos_hint={"center_x": 0.5},
+        )
+        column.bind(minimum_height=column.setter("height"))
+
+        self.art_label = mono_label(
+            "",
+            ART_FONT,
+            markup=True,
+            size_hint_y=None,
+            height=self.art_rows * art_lh,
+        )
+        column.add_widget(self.art_label)
+        column.add_widget(Label(size_hint_y=None, height=dp(28)))
+
+        self.song_label = mono_label(
+            "",
+            dp(17),
+            halign="left",
+            shorten=True,
+            shorten_from="right",
+            size_hint_y=None,
+            height=dp(24),
+        )
+        self.artist_label = mono_label(
+            "",
+            dp(13),
+            halign="left",
+            shorten=True,
+            shorten_from="right",
+            color=GRAY,
+            size_hint_y=None,
+            height=dp(20),
+        )
+        for label in (self.song_label, self.artist_label):
+            label.bind(size=label.setter("text_size"))
+            column.add_widget(label)
+
+        column.add_widget(Label(size_hint_y=None, height=dp(18)))
+
+        self.bar_label = mono_label(
+            "",
+            LINE_FONT,
+            markup=True,
+            size_hint_y=None,
+            height=dp(20),
+        )
+        column.add_widget(self.bar_label)
+        column.add_widget(Label(size_hint_y=None, height=dp(14)))
+
+        column.add_widget(mono_label(CONTROLS, dp(20), size_hint_y=None, height=dp(32)))
+        column.add_widget(Label(size_hint_y=None, height=dp(22)))
+
+        self.counter_label = mono_label("", dp(14), size_hint_y=None, height=dp(20))
+        column.add_widget(self.counter_label)
+
+        root.add_widget(column)
+        root.add_widget(Label())
+
+        self.timer_label = mono_label(
+            "00:00",
+            dp(11),
+            color=GRAY,
+            size_hint_y=None,
+            height=dp(16),
+        )
+        root.add_widget(self.timer_label)
 
         return root
 

@@ -1,102 +1,43 @@
-from concurrent.futures import ThreadPoolExecutor
+"""
+Downloads a link from the terminal, like the app
+Usage: test_general.py [url] [audio|video] [kbps|height]
+Files go to tests/output/downloadity
+"""
+import sys
 from time import perf_counter
 
-from downloadity.extractor import extract
-from downloadity.formats import build_quality_options
-from downloadity.downloader import download_audio, download_video
-from downloadity import spotify
+import paths
+from downloadity.download_queue import DownloadQueue
+from downloadity.media import resolve_media
+
+args = sys.argv[1:]
+url = args[0] if args else input("Paste the link: ")
+
+start = perf_counter()
+media = resolve_media(url)
+if media is None:
+    raise SystemExit("Invalid link")
+print(f"validated in {perf_counter() - start:.1f}s")
+
+for kind in ("audio", "video"):
+    labels = [f"{q.label} ({q.filesize_label})" for q in getattr(media.options, kind)]
+    print(f"{kind}: {', '.join(labels) or '-'}")
+
+kind = args[1] if len(args) > 1 else input("\naudio or video? ")
+value = int(args[2] if len(args) > 2 else input("kbps or height: "))
 
 
-def download_one(track_url: str, mode: str) -> dict:
-    try:
-        info = extract(track_url, flat=False)
+class Printer:
+    def on_item_start(self, item):
+        print(f"[{item.position}/{item.total}] {item.artist} - {item.title}")
 
-        if info["type"] == "error":
-            return {
-                "success": False,
-                "error": info["message"],
-            }
+    def on_progress(self, fraction):
+        pass
 
-        opts = build_quality_options(info)
-
-        if mode == "a":
-            if not opts.audio:
-                return {
-                    "success": False,
-                    "error": "No audio formats available.",
-                }
-
-            best = max(opts.audio, key=lambda a: a.bitrate)
-
-            return download_audio(
-                track_url,
-                best,
-                output_dir=".",
-            )
-
-        if not opts.video:
-            return {
-                "success": False,
-                "error": "No video formats available.",
-            }
-
-        best = max(opts.video, key=lambda v: v.height)
-
-        return download_video(
-            track_url,
-            best,
-            output_dir=".",
-        )
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-        }
-
-
-url = input("Paste the link: ")
-
-urls_to_process = [url]
-
-if "open.spotify.com" in url:
-    print("Spotify link detected, resolving to YouTube...")
-
-    start = perf_counter()
-
-    resolved = spotify.extract(url)
-
-    elapsed = perf_counter() - start
-
-    if not resolved:
-        print("Could not resolve this Spotify URL to a YouTube match.")
-        raise SystemExit(1)
-
-    urls_to_process = resolved
-
-    print(f"Resolved {len(resolved)} track(s)")
-    print(f"Spotify → YouTube: {elapsed:.2f}s")
-
-
-mode = input("\nDownload (a)udio or (v)ideo? ").lower()
-
-if mode not in ("a", "v"):
-    print("Invalid mode.")
-    raise SystemExit(1)
+    def on_finished(self, done, failed, folder):
+        print(f"\ndone: {done}, failed: {failed}\nfolder: {folder}")
 
 
 start = perf_counter()
-
-with ThreadPoolExecutor(max_workers=3) as executor:
-    results = executor.map(
-        lambda track_url: download_one(track_url, mode),
-        urls_to_process,
-    )
-
-    for result in results:
-        print(result)
-
-elapsed = perf_counter() - start
-
-print(f"\nDownloads: {elapsed:.2f}s")
-print(f"Total: {elapsed:.2f}s")
+DownloadQueue(media, kind, value, str(paths.OUTPUT / "downloadity"), Printer()).run()
+print(f"downloaded in {perf_counter() - start:.1f}s")
