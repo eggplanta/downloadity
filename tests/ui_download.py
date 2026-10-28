@@ -1,6 +1,7 @@
 """
 Drives the app: link -> quality -> confirm -> download -> OK
-Usage: ui_download.py url audio|video kbps|height [shots name]
+Usage: ui_download.py url audio|video kbps|height [shots name] [start end]
+Start and end (min:sec) cut a single video
 Shots and files go to tests/output, per shots name
 """
 import os
@@ -13,18 +14,20 @@ import paths
 from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.graphics import Color, Rectangle
+from kivy.uix.textinput import TextInput
 
 import main
 from downloadity.formats import VIDEO_MARGIN, VideoQuality, pick_quality
 
 URL, KIND, VALUE = sys.argv[1], sys.argv[2], int(sys.argv[3])
 NAME = sys.argv[4] if len(sys.argv) > 4 else "single"
+CUT = sys.argv[5:7] if len(sys.argv) > 6 else None
 SHOTS = paths.OUTPUT / "shots" / NAME
 SHOTS.mkdir(parents=True, exist_ok=True)
 main.DOWNLOAD_ROOT = str(paths.OUTPUT / "downloadity" / NAME)
 
 app = main.DownloadityApp()
-state = {"item": None, "shot": set(), "t0": 0.0, "arts": []}
+state = {"item": None, "shot": set(), "t0": 0.0, "arts": [], "marks": set()}
 
 
 def log(text):
@@ -81,16 +84,37 @@ def wait_valid(dt):
     log(f"valid: {len(media.entries)} items, {len(media.invalid)} invalid")
     app.download_button.dispatch("on_release")
     quality = pick_quality(getattr(media.options, KIND), VALUE)
-    state["estimate"] = shown_size(quality)
+    state["estimate"] = None if CUT else shown_size(quality)
     app.on_quality_select(KIND, quality)
     Clock.schedule_once(confirm, 0.5)
 
 
 def confirm(dt):
     p = popup()
-    log(f"confirm: {popup_text(p)[0]!r}")
-    press(p, "confirm")
+    text = popup_text(p)[0]
+    log(f"confirm: {text!r}")
+
+    # Single videos ask full or cut
+    if not text.startswith("full video?"):
+        press(p, "confirm")
+    elif CUT:
+        press(p, "no, cut")
+        return Clock.schedule_once(fill_cut, 0.5)
+    else:
+        press(p, "yes")
     Clock.schedule_once(skip_invalid, 0.5)
+
+
+def fill_cut(dt):
+    p = popup()
+    button = p.buttons[1]
+    log(f"cut popup: {popup_text(p)} disabled={button.disabled}")
+    for field, value in zip((w for w in p.walk() if isinstance(w, TextInput)), CUT):
+        field.text = value
+    log(f"cut {CUT}: disabled={button.disabled}")
+    Clock.schedule_once(lambda dt: p.export_to_png(str(SHOTS / "popup_cut.png")), 0.2)
+    Clock.schedule_once(lambda dt: press(p, "download"), 0.4)
+    Clock.schedule_once(wait_done, 1.4)
 
 
 def skip_invalid(dt):
@@ -145,6 +169,7 @@ def show_item(item):
     markup, cols, rows = item.extra or ("", 0, 0)
     state["arts"].append((item.title, bool(markup)))
     state["item"] = item.position
+    state["marks"] = set()
     log(f"[{item.position}/{item.total}] {item.title!r} by {item.artist!r} art {cols}x{rows}: {art_summary(markup)}")
 
 
@@ -153,6 +178,10 @@ original_draw_bar = app.draw_bar
 
 def draw_bar(fraction):
     original_draw_bar(fraction)
+    for mark in (0.25, 0.5, 0.75):
+        if fraction >= mark and mark not in state["marks"]:
+            state["marks"].add(mark)
+            log(f"bar {int(mark * 100)}%")
     item = state["item"]
     if item and item not in state["shot"] and fraction > 0.3:
         state["shot"].add(item)

@@ -102,6 +102,25 @@ def vertical_line():
     label.bind(size=redraw)
     return label
 
+def parse_time(text):
+    """
+    min:sec or h:min:sec to seconds
+    """
+    parts = text.strip().split(":")
+    if not 2 <= len(parts) <= 3 or not all(part.isdigit() for part in parts):
+        return None
+
+    values = [int(part) for part in parts]
+    if values[-1] > 59 or (len(values) == 3 and values[1] > 59):
+        return None
+    hours, minutes, seconds = [0] * (3 - len(values)) + values
+    return hours * 3600 + minutes * 60 + seconds
+
+def format_time(seconds):
+    hours, rest = divmod(int(seconds), 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
+
 def quality_column():
     column = BoxLayout(
         orientation="vertical",
@@ -147,6 +166,10 @@ class AsciiButton(Button):
             markup=True,
         )
 
+        # Disabled buttons turn gray
+        self.border_label.disabled_color = GRAY
+        self.text_label.disabled_color = GRAY
+
         self.add_widget(self.border_label)
         self.add_widget(self.text_label)
 
@@ -186,10 +209,10 @@ class AsciiButton(Button):
         self.text_label.color = c
 
 class AsciiPopup(ModalView):
-    def __init__(self, message, buttons, items=None, **kwargs):
+    def __init__(self, message, buttons, items=None, body=None, height=None, **kwargs):
         super().__init__(
             size_hint=(None, None),
-            size=(dp(320), dp(420) if items else dp(230)),
+            size=(dp(320), height or (dp(420) if items else dp(230))),
             auto_dismiss=False,
             background="",
             background_color=(0, 0, 0, 1),
@@ -219,12 +242,16 @@ class AsciiPopup(ModalView):
 
         if items:
             content.add_widget(self.item_list(items))
+        if body:
+            content.add_widget(body)
 
         row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(16))
+        self.buttons = []
         for label, callback in buttons:
             button = AsciiButton(escape_markup(f"[ {label} ]"), border=False, font_size=dp(15))
             button.bind(on_release=lambda _b, cb=callback: self.choose(cb))
             row.add_widget(button)
+            self.buttons.append(button)
         content.add_widget(row)
 
         layout.add_widget(content)
@@ -377,12 +404,24 @@ class DownloadityApp(App):
             column.add_widget(button)
 
     def on_quality_select(self, kind, quality):
-        message = f"download in {quality.label}?"
         size = quality.filesize_label
+        usage = ""
         if size:
             usage = f"~{size}" if self.media.is_playlist else size
-            message += f"\n\nthis will use {usage}\nof your storage"
+            usage = f"\n\nthis will use {usage}\nof your storage"
 
+        # Single videos can be cut
+        if kind == "video" and not self.media.is_playlist:
+            AsciiPopup(
+                "full video?" + usage,
+                [
+                    ("yes", lambda: self.start_download(kind, quality)),
+                    ("no, cut", lambda: self.ask_cut(quality)),
+                ],
+            ).open()
+            return
+
+        message = f"download in {quality.label}?" + usage
         AsciiPopup(
             message,
             [
@@ -390,6 +429,65 @@ class DownloadityApp(App):
                 ("confirm", lambda: self.confirm_invalid(kind, quality)),
             ],
         ).open()
+
+    def ask_cut(self, quality):
+        duration = self.media.entries[0].duration
+        box = BoxLayout(orientation="vertical", spacing=dp(10))
+        fields = []
+
+        for name in ("start", "end"):
+            row = BoxLayout(size_hint_y=None, height=dp(32))
+            label = mono_label(name, dp(15), halign="left", size_hint_x=None, width=dp(60))
+            label.bind(size=label.setter("text_size"))
+            row.add_widget(label)
+            row.add_widget(mono_label("[", dp(15), size_hint_x=None, width=dp(12)))
+
+            field = TextInput(
+                multiline=False,
+                hint_text="min:sec",
+                hint_text_color=GRAY,
+                foreground_color=(1, 1, 1, 1),
+                background_color=(0, 0, 0, 1),
+                cursor_color=(1, 1, 1, 1),
+                padding=[dp(6), dp(6)],
+                font_name="DejaVuSansMono",
+                font_size=dp(15),
+                write_tab=False,
+            )
+            row.add_widget(field)
+            row.add_widget(mono_label("]", dp(15), size_hint_x=None, width=dp(12)))
+            box.add_widget(row)
+            fields.append(field)
+
+        if duration:
+            box.add_widget(mono_label(f"video length: {format_time(duration)}", dp(12), color=GRAY))
+
+        def cut_range():
+            start, end = (parse_time(field.text) for field in fields)
+            if start is None or end is None or end - start < 1:
+                return None
+            if duration and end > duration:
+                return None
+            return start, end
+
+        popup = AsciiPopup(
+            "cut the video:",
+            [
+                ("cancel", lambda: None),
+                ("download", lambda: self.start_download("video", quality, cut_range())),
+            ],
+            body=box,
+            height=dp(300),
+        )
+        download_button = popup.buttons[1]
+        download_button.disabled = True
+
+        def validate(*_args):
+            download_button.disabled = cut_range() is None
+
+        for field in fields:
+            field.bind(text=validate)
+        popup.open()
 
     def confirm_invalid(self, kind, quality):
         if not self.media.invalid:
@@ -404,7 +502,7 @@ class DownloadityApp(App):
 
     #====================DOWNLOAD======================#
 
-    def start_download(self, kind, quality):
+    def start_download(self, kind, quality, cut=None):
         self.kind = kind
         self.total_items = len(self.media.entries)
         self.swap_player(self.build_video_column() if kind == "video" else self.build_music_column())
@@ -422,6 +520,7 @@ class DownloadityApp(App):
             DOWNLOAD_ROOT,
             listener=self,
             prepare_extra=self.make_art,
+            cut=cut,
         )
         threading.Thread(target=self.run_queue, args=(queue,), daemon=True).start()
 

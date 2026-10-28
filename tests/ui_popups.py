@@ -17,7 +17,18 @@ SHOTS = paths.OUTPUT / "shots"
 SHOTS.mkdir(parents=True, exist_ok=True)
 
 app = main.DownloadityApp()
-app.start_download = lambda kind, quality: Clock.schedule_once(fake_finish, 0.5)
+
+
+def fake_start(*args, **kwargs):
+    # Player parts the finish popup needs
+    app.kind = "audio"
+    app.total_items = len(app.media.entries)
+    app.swap_player(app.build_music_column())
+    app.show_item_placeholder()
+    Clock.schedule_once(fake_finish, 0.5)
+
+
+app.start_download = fake_start
 
 
 def popup():

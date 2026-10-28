@@ -1,5 +1,6 @@
 import copy
 import os
+import subprocess
 from typing import Optional
 
 import yt_dlp
@@ -15,6 +16,7 @@ def download_audio(
     on_progress=None,
     filename: Optional[str] = None,
     info: Optional[dict] = None,
+    on_postprocess=None,
 ) -> dict:
     outtmpl = _outtmpl(output_dir, filename)
 
@@ -40,6 +42,8 @@ def download_audio(
             }
         ],
     }
+    if on_postprocess:
+        options["postprocessor_hooks"] = [on_postprocess]
 
     return _run_download(
         url,
@@ -83,6 +87,34 @@ def download_video(
     )
 
 
+def cut_video(source: str, start: float, end: float, output: str, on_progress=None) -> bool:
+    """
+    Re-encodes the range for an exact cut
+    Both streams re-encoded keep A/V sync
+    """
+    length = end - start
+    command = [
+        "ffmpeg", "-y", "-v", "error", "-nostats",
+        "-ss", str(start), "-t", str(length), "-i", source,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "160k",
+        "-movflags", "+faststart",
+        "-progress", "pipe:1",
+        output,
+    ]
+
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    for line in process.stdout:
+        key, _, value = line.strip().partition("=")
+        if key == "out_time_us" and value.isdigit() and on_progress:
+            on_progress(min(1.0, int(value) / 1e6 / length))
+    process.wait()
+
+    if process.returncode != 0 and os.path.exists(output):
+        os.remove(output)
+    return process.returncode == 0
+
+
 def _outtmpl(output_dir: str, filename: Optional[str]) -> str:
     name = filename.replace("%", "%%") if filename else "%(title)s"
     return os.path.join(output_dir, f"{name}.%(ext)s")
@@ -101,9 +133,12 @@ def _run_download(
     for attempt in range(max_retries + 1):
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
-                # Embedded items have no page to re-extract
+                # Reuse the extraction when given
                 if info:
-                    ydl.process_ie_result(copy.deepcopy(info), download=True)
+                    # Drop the extraction's format choice
+                    fresh = copy.deepcopy(info)
+                    fresh.pop("requested_formats", None)
+                    ydl.process_ie_result(fresh, download=True)
                 else:
                     ydl.extract_info(url, download=True)
             return {"success": True}
