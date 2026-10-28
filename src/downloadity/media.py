@@ -18,6 +18,7 @@ SAMPLE_MAX = 12
 WORKERS = 3
 
 UNAVAILABLE_TITLES = ("[Deleted video]", "[Private video]")
+CAPTION_CHARS = 40
 
 
 @dataclass
@@ -28,6 +29,7 @@ class MediaEntry:
     spotify_track: Optional[spotify._SpotifyTrack] = None
     title: Optional[str] = None
     invalid: bool = False
+    embedded: bool = False
 
 
 @dataclass
@@ -66,13 +68,16 @@ def resolve_media(url: str) -> Optional[Media]:
             return None
 
         if info["type"] == "playlist":
-            title = info.get("title")
+            caption = caption_title(info)
+            title = f"{caption} [{info.get('id')}]" if caption else info.get("title")
             entries = [
                 MediaEntry(
                     url=e["url"],
                     duration=e.get("duration"),
                     title=e.get("title"),
                     invalid=_is_unavailable(e),
+                    info=e["item"] and {"type": "video", **e["item"]},
+                    embedded=bool(e["item"]),
                 )
                 for e in info["entries"]
                 if e.get("url")
@@ -111,6 +116,19 @@ def resolve_media(url: str) -> Optional[Media]:
     )
 
 
+def caption_title(info: dict) -> Optional[str]:
+    """
+    Instagram titles are generic, use the caption
+    """
+    if info.get("extractor_key") != "Instagram":
+        return None
+
+    caption = " ".join((info.get("description") or "").split())
+    if len(caption) > CAPTION_CHARS:
+        caption = caption[:CAPTION_CHARS].rstrip() + "..."
+    return caption or info.get("title")
+
+
 def sample_indices(count: int) -> list[int]:
     """
     20% of the items (6 to 12), evenly spaced
@@ -133,7 +151,7 @@ def _extract_samples(entries: list[MediaEntry]) -> list[MediaEntry]:
     with ThreadPoolExecutor(max_workers=WORKERS) as executor:
         while picks:
             pending = [entries[i] for i in picks if entries[i].info is None]
-            list(executor.map(_extract_entry, pending))
+            list(executor.map(extract_entry, pending))
 
             retry = []
             for index in picks:
@@ -163,16 +181,19 @@ def _is_unavailable(entry: dict) -> bool:
     return entry.get("title") in UNAVAILABLE_TITLES or entry.get("availability") == "private"
 
 
-def _extract_entry(entry: MediaEntry) -> None:
-    if entry.url is None and entry.spotify_track:
-        entry.url = spotify.best_match_url(entry.spotify_track)
+def extract_entry(entry: MediaEntry) -> None:
+    """
+    Spotify falls back to the next match
+    """
+    urls = [entry.url] if entry.url else []
+    if not urls and entry.spotify_track:
+        urls = spotify.best_match_urls(entry.spotify_track)
 
-    if entry.url is None:
-        return
-
-    info = extractor.extract(entry.url)
-    if info["type"] == "video":
-        entry.info = info
+    for url in urls:
+        info = extractor.extract(url)
+        if info["type"] == "video":
+            entry.url, entry.info = url, info
+            return
 
 
 def _total_duration(entries: list[MediaEntry], sampled: list[QualityOptions]) -> float:

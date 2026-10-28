@@ -5,10 +5,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Optional
 
-from . import extractor, spotify
 from .downloader import download_audio, download_video
 from .formats import build_quality_options, pick_quality
-from .media import AUDIO_ONLY_HOSTS, Media, MediaEntry
+from .media import AUDIO_ONLY_HOSTS, Media, MediaEntry, caption_title, extract_entry
 from .throttle import YoutubeBlockedError, is_block
 
 
@@ -48,6 +47,7 @@ class DownloadQueue:
         requeued = set()
         done = 0
         failed = []
+        video = self.kind == "video"
 
         with ThreadPoolExecutor(max_workers=1) as executor:
             future, future_index = None, None
@@ -65,7 +65,7 @@ class DownloadQueue:
 
                 if blocked:
                     if index in requeued:
-                        failed.append(failed_title(entries[index]))
+                        failed.append(failed_title(entries[index], video))
                     else:
                         requeued.add(index)
                         pending.append(index)
@@ -80,10 +80,10 @@ class DownloadQueue:
 
                 entry = entries[index]
                 if entry.info is None:
-                    failed.append(failed_title(entry))
+                    failed.append(failed_title(entry, video))
                     continue
 
-                title, artist = display_names(entry)
+                title, artist = display_names(entry, video)
                 self.listener.on_item_start(QueueItem(
                     position=done + len(failed) + 1,
                     total=len(entries),
@@ -92,7 +92,7 @@ class DownloadQueue:
                     extra=extra,
                 ))
 
-                failed_name = failed_title(entry)
+                failed_name = failed_title(entry, video)
                 result = self._download(entry)
 
                 if result.get("blocked") and index not in requeued:
@@ -111,13 +111,7 @@ class DownloadQueue:
         entry = self.media.entries[index]
 
         if entry.info is None:
-            if entry.url is None and entry.spotify_track:
-                entry.url = spotify.best_match_url(entry.spotify_track)
-
-            if entry.url:
-                info = extractor.extract(entry.url)
-                if info["type"] == "video":
-                    entry.info = info
+            extract_entry(entry)
 
         if entry.info is None or self.prepare_extra is None:
             return None
@@ -144,17 +138,22 @@ class DownloadQueue:
             expected = quality.total_filesize
             download = download_video
 
+        info = entry.info["ytdlp_info"]
+        caption = caption_title(info)
         result = download(
             entry.url,
             quality,
             output_dir=self.output_dir,
             on_progress=self._progress_hook(expected),
+            filename=caption and safe_name(f"{caption} [{info.get('id')}]"),
+            info=info if entry.embedded else None,
         )
 
         if not result["success"] and is_block(result.get("error") or ""):
             result["blocked"] = True
 
-        entry.info = None
+        if not entry.embedded:
+            entry.info = None
         return result
 
     def _progress_hook(self, expected: Optional[int]):
@@ -181,21 +180,30 @@ class DownloadQueue:
         return hook
 
 
-def display_names(entry: MediaEntry) -> tuple[str, str]:
+def display_names(entry: MediaEntry, video: bool = False) -> tuple[str, str]:
     track = entry.spotify_track
     if track:
         return track.title, ", ".join(track.artists)
 
     info = (entry.info or {}).get("ytdlp_info") or {}
+    caption = caption_title(info)
+    if caption:
+        return caption, info.get("uploader") or info.get("channel") or ""
+
+    if video:
+        return info.get("title") or "", info.get("uploader") or info.get("channel") or ""
+
     title = info.get("track") or info.get("title") or ""
     artist = info.get("artist") or info.get("uploader") or info.get("channel") or ""
 
-    artist = artist.removesuffix(" - Topic")
-    return title.removeprefix(f"{artist} - "), artist
+    artist = ", ".join(dict.fromkeys(artist.removesuffix(" - Topic").split(", ")))
+    for dash in ("-", "–", "—"):
+        title = title.removeprefix(f"{artist} {dash} ")
+    return title, artist
 
 
-def failed_title(entry: MediaEntry) -> str:
-    return display_names(entry)[0] or entry.title or "unknown title"
+def failed_title(entry: MediaEntry, video: bool = False) -> str:
+    return display_names(entry, video)[0] or entry.title or "unknown title"
 
 
 def safe_name(name: str) -> str:

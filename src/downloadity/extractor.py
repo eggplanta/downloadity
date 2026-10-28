@@ -65,6 +65,9 @@ def extract(url: str, flat: str | bool = False) -> dict:
         return {
             "type": "playlist",
             "title": info.get("title"),
+            "id": info.get("id"),
+            "description": info.get("description"),
+            "extractor_key": info.get("extractor_key"),
             "entries": entries,
         }
 
@@ -81,12 +84,13 @@ def _extract_info(url: str, options: dict) -> dict:
 
 
 def _extract_flat_item(info: dict) -> dict:
-
+    # Instagram carousels come fully extracted
     return {
         "title": info.get("title"),
         "url": info.get("url") or info.get("webpage_url"),
         "duration": info.get("duration"),
         "availability": info.get("availability"),
+        "item": _extract_item(info) if info.get("formats") else None,
     }
 
 

@@ -18,6 +18,7 @@ from .throttle import throttle
 
 
 NO_TRACK_LIMIT = None
+MATCH_CANDIDATES = 2
 
 _RETRY = RetryPolicy(
     max_attempts=5,
@@ -80,7 +81,7 @@ def _spotify_client() -> SpotifyClient:
 def _track_from_data(data: SpotifyTrackData) -> _SpotifyTrack:
     return _SpotifyTrack(
         title=data.name,
-        artists=[artist.name for artist in data.artists],
+        artists=list(dict.fromkeys(artist.name for artist in data.artists)),
         duration_ms=data.duration_ms,
     )
 
@@ -433,18 +434,6 @@ def _rank_candidates(
     return scored
 
 
-def _best_match_url(track: _SpotifyTrack) -> Optional[str]:
-    """
-    Return the URL of the best candidate
-    """
-    ranked = _rank_candidates(track)
-
-    if not ranked:
-        return None
-
-    return ranked[0][1].url
-
-
 def get_collection(url: str) -> tuple[Optional[str], list[_SpotifyTrack]]:
     """
     Spotify metadata only, no YouTube search
@@ -466,5 +455,8 @@ def get_collection(url: str) -> tuple[Optional[str], list[_SpotifyTrack]]:
     raise ValueError(f"Unsupported Spotify URL: {url}")
 
 
-def best_match_url(track: _SpotifyTrack) -> Optional[str]:
-    return _best_match_url(track)
+def best_match_urls(track: _SpotifyTrack) -> list[str]:
+    """
+    Best YouTube candidates, best first
+    """
+    return [candidate.url for _, candidate in _rank_candidates(track)[:MATCH_CANDIDATES]]

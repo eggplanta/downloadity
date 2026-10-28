@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import threading
 
@@ -35,6 +36,9 @@ ART_FONT = dp(8)
 ART_COLS = 60
 GRAY = (0.5, 0.5, 0.5, 1)
 CONTROLS = "⇄    ▮◀    ❚❚    ▶▮    ↻"
+VIDEO_CONTROLS = "▮◀   ❚❚   ▶▮"
+VIDEO_ASPECT = 16 / 9
+VIDEO_ASPECTS = (0.5, 2.4)
 
 if platform == "android":
     DOWNLOAD_ROOT = "/storage/emulated/0/downloadity"
@@ -373,16 +377,14 @@ class DownloadityApp(App):
             column.add_widget(button)
 
     def on_quality_select(self, kind, quality):
+        message = f"download in {quality.label}?"
         size = quality.filesize_label
-        if size is None:
-            usage = "an unknown amount"
-        elif self.media.is_playlist:
-            usage = f"~{size}"
-        else:
-            usage = size
+        if size:
+            usage = f"~{size}" if self.media.is_playlist else size
+            message += f"\n\nthis will use {usage}\nof your storage"
 
         AsciiPopup(
-            f"download in {quality.label}?\n\nthis will use {usage}\nof your storage",
+            message,
             [
                 ("cancel", lambda: None),
                 ("confirm", lambda: self.confirm_invalid(kind, quality)),
@@ -403,7 +405,9 @@ class DownloadityApp(App):
     #====================DOWNLOAD======================#
 
     def start_download(self, kind, quality):
+        self.kind = kind
         self.total_items = len(self.media.entries)
+        self.swap_player(self.build_video_column() if kind == "video" else self.build_music_column())
         self.show_item_placeholder()
         self.screens.current = "downloading"
 
@@ -429,7 +433,24 @@ class DownloadityApp(App):
             Clock.schedule_once(lambda dt: self.show_finished(0, [], queue.output_dir, error))
 
     def make_art(self, entry):
-        return cover_markup(entry.info["ytdlp_info"], ART_COLS, self.art_rows)
+        info = entry.info["ytdlp_info"]
+        cols, rows = self.art_dims(info)
+        aspect = cols * self.art_cw / (rows * self.art_lh)
+        return cover_markup(info, cols, rows, aspect), cols, rows
+
+    def art_dims(self, info):
+        if self.kind != "video":
+            return ART_COLS, self.art_rows
+
+        # Playlists keep a fixed 16:9 frame
+        width, height = (info or {}).get("width"), (info or {}).get("height")
+        aspect = VIDEO_ASPECT
+        if width and height and not self.media.is_playlist:
+            aspect = min(VIDEO_ASPECTS[1], max(VIDEO_ASPECTS[0], width / height))
+        area = ART_COLS * self.art_cw * self.art_rows * self.art_lh
+        cols = round(math.sqrt(area * aspect) / self.art_cw)
+        rows = round(math.sqrt(area / aspect) / self.art_lh)
+        return cols, rows
 
     # Queue listener (worker thread)
 
@@ -445,18 +466,27 @@ class DownloadityApp(App):
     # Player screen
 
     def show_item_placeholder(self):
-        self.art_label.text = self.placeholder_art
+        info = self.media.entries[0].info
+        self.set_art("", *self.art_dims(info and info["ytdlp_info"]))
         self.song_label.text = ""
         self.artist_label.text = ""
         self.counter_label.text = f"1 / {self.total_items}"
         self.draw_bar(0)
 
     def show_item(self, item):
-        self.art_label.text = item.extra or self.placeholder_art
+        markup, cols, rows = item.extra or ("", *self.art_dims(None))
+        self.set_art(markup, cols, rows)
         self.song_label.text = escape_markup(item.title)
         self.artist_label.text = escape_markup(item.artist)
         self.counter_label.text = f"{item.position} / {item.total}"
         self.draw_bar(0)
+
+    def set_art(self, markup, cols, rows):
+        width = cols * self.art_cw
+        self.player_column.width = width
+        self.art_label.height = rows * self.art_lh
+        self.art_label.text = markup or "[color=#333333]" + "\n".join(["·" * cols] * rows) + "[/color]"
+        self.bar_cols = int(width / char_width("━", LINE_FONT))
 
     def draw_bar(self, fraction):
         played = int(fraction * (self.bar_cols - 1))
@@ -754,24 +784,41 @@ class DownloadityApp(App):
     #===================DOWNLOADING====================#
 
     def build_downloading(self):
-        art_cw = char_width("@", ART_FONT)
-        art_lh = line_height(ART_FONT)
-        self.art_rows = max(1, round(ART_COLS * art_cw / art_lh))
-        width = ART_COLS * art_cw
+        self.art_cw = char_width("@", ART_FONT)
+        self.art_lh = line_height(ART_FONT)
+        self.art_rows = max(1, round(ART_COLS * self.art_cw / self.art_lh))
 
-        self.placeholder_art = "[color=#333333]" + "\n".join(["·" * ART_COLS] * self.art_rows) + "[/color]"
-        self.bar_cols = int(width / char_width("━", LINE_FONT))
-
-        root = BoxLayout(
+        self.downloading_root = BoxLayout(
             orientation="vertical",
             padding=[dp(20), dp(12), dp(20), dp(12)],
         )
-        root.add_widget(Label())
+        self.downloading_root.add_widget(Label())
+        self.player_column = Label()
+        self.downloading_root.add_widget(self.player_column)
+        self.downloading_root.add_widget(Label())
 
+        self.timer_label = mono_label(
+            "00:00",
+            dp(11),
+            color=GRAY,
+            size_hint_y=None,
+            height=dp(16),
+        )
+        self.downloading_root.add_widget(self.timer_label)
+
+        return self.downloading_root
+
+    def swap_player(self, column):
+        index = self.downloading_root.children.index(self.player_column)
+        self.downloading_root.remove_widget(self.player_column)
+        self.downloading_root.add_widget(column, index=index)
+        self.player_column = column
+
+    def player_parts(self):
         column = BoxLayout(
             orientation="vertical",
             size_hint=(None, None),
-            width=width,
+            width=ART_COLS * self.art_cw,
             pos_hint={"center_x": 0.5},
         )
         column.bind(minimum_height=column.setter("height"))
@@ -781,36 +828,8 @@ class DownloadityApp(App):
             ART_FONT,
             markup=True,
             size_hint_y=None,
-            height=self.art_rows * art_lh,
+            height=self.art_rows * self.art_lh,
         )
-        column.add_widget(self.art_label)
-        column.add_widget(Label(size_hint_y=None, height=dp(28)))
-
-        self.song_label = mono_label(
-            "",
-            dp(17),
-            halign="left",
-            shorten=True,
-            shorten_from="right",
-            size_hint_y=None,
-            height=dp(24),
-        )
-        self.artist_label = mono_label(
-            "",
-            dp(13),
-            halign="left",
-            shorten=True,
-            shorten_from="right",
-            color=GRAY,
-            size_hint_y=None,
-            height=dp(20),
-        )
-        for label in (self.song_label, self.artist_label):
-            label.bind(size=label.setter("text_size"))
-            column.add_widget(label)
-
-        column.add_widget(Label(size_hint_y=None, height=dp(18)))
-
         self.bar_label = mono_label(
             "",
             LINE_FONT,
@@ -818,6 +837,41 @@ class DownloadityApp(App):
             size_hint_y=None,
             height=dp(20),
         )
+        return column
+
+    def name_labels(self, title_font, artist_font):
+        self.song_label = mono_label(
+            "",
+            title_font,
+            halign="left",
+            shorten=True,
+            shorten_from="right",
+            size_hint_y=None,
+            height=title_font + dp(7),
+        )
+        self.artist_label = mono_label(
+            "",
+            artist_font,
+            halign="left",
+            shorten=True,
+            shorten_from="right",
+            color=GRAY,
+            size_hint_y=None,
+            height=artist_font + dp(7),
+        )
+        for label in (self.song_label, self.artist_label):
+            label.bind(size=label.setter("text_size"))
+        return self.song_label, self.artist_label
+
+    def build_music_column(self):
+        column = self.player_parts()
+        column.add_widget(self.art_label)
+        column.add_widget(Label(size_hint_y=None, height=dp(28)))
+
+        for label in self.name_labels(dp(17), dp(13)):
+            column.add_widget(label)
+        column.add_widget(Label(size_hint_y=None, height=dp(18)))
+
         column.add_widget(self.bar_label)
         column.add_widget(Label(size_hint_y=None, height=dp(14)))
 
@@ -826,20 +880,29 @@ class DownloadityApp(App):
 
         self.counter_label = mono_label("", dp(14), size_hint_y=None, height=dp(20))
         column.add_widget(self.counter_label)
+        return column
 
-        root.add_widget(column)
-        root.add_widget(Label())
+    def build_video_column(self):
+        column = self.player_parts()
+        column.add_widget(self.art_label)
+        column.add_widget(Label(size_hint_y=None, height=dp(8)))
+        column.add_widget(self.bar_label)
 
-        self.timer_label = mono_label(
-            "00:00",
-            dp(11),
-            color=GRAY,
-            size_hint_y=None,
-            height=dp(16),
-        )
-        root.add_widget(self.timer_label)
+        # Controls left, counter right
+        controls = BoxLayout(size_hint_y=None, height=dp(30))
+        buttons = mono_label(VIDEO_CONTROLS, dp(16), size_hint_x=None)
+        buttons.bind(texture_size=lambda label, size: setattr(label, "width", size[0]))
+        controls.add_widget(buttons)
 
-        return root
+        self.counter_label = mono_label("", dp(13), halign="right")
+        self.counter_label.bind(size=self.counter_label.setter("text_size"))
+        controls.add_widget(self.counter_label)
+        column.add_widget(controls)
+        column.add_widget(Label(size_hint_y=None, height=dp(18)))
+
+        for label in self.name_labels(dp(15), dp(12)):
+            column.add_widget(label)
+        return column
 
 if __name__ == "__main__":
     DownloadityApp().run()

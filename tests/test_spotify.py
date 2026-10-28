@@ -15,8 +15,8 @@ print(f"{name or 'track'}: {len(tracks)} track(s)\n")
 
 for index, track in enumerate(tracks, start=1):
     start = perf_counter()
-    match = spotify.best_match_url(track)
+    matches = spotify.best_match_urls(track)
     elapsed = perf_counter() - start
 
     print(f"{index}. {', '.join(track.artists)} - {track.title}")
-    print(f"   {match or 'no match'} ({elapsed:.1f}s)")
+    print(f"   {', '.join(matches) or 'no match'} ({elapsed:.1f}s)")

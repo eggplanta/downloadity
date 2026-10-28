@@ -1,7 +1,7 @@
 """
 Drives the app: link -> quality -> confirm -> download -> OK
 Usage: ui_download.py url audio|video kbps|height [shots name]
-Saves screenshots and files to tests/output
+Shots and files go to tests/output, per shots name
 """
 import os
 import re
@@ -15,12 +15,13 @@ from kivy.core.window import Window
 from kivy.graphics import Color, Rectangle
 
 import main
-from downloadity.formats import pick_quality
+from downloadity.formats import VIDEO_MARGIN, VideoQuality, pick_quality
 
 URL, KIND, VALUE = sys.argv[1], sys.argv[2], int(sys.argv[3])
-SHOTS = paths.OUTPUT / "shots" / (sys.argv[4] if len(sys.argv) > 4 else "single")
+NAME = sys.argv[4] if len(sys.argv) > 4 else "single"
+SHOTS = paths.OUTPUT / "shots" / NAME
 SHOTS.mkdir(parents=True, exist_ok=True)
-main.DOWNLOAD_ROOT = str(paths.OUTPUT / "downloadity")
+main.DOWNLOAD_ROOT = str(paths.OUTPUT / "downloadity" / NAME)
 
 app = main.DownloadityApp()
 state = {"item": None, "shot": set(), "t0": 0.0, "arts": []}
@@ -51,6 +52,13 @@ def black_background():
         Rectangle(pos=app.root.pos, size=app.root.size)
 
 
+def shown_size(quality):
+    # Same size the confirm popup shows
+    if isinstance(quality, VideoQuality):
+        return quality.total_filesize and quality.total_filesize * VIDEO_MARGIN
+    return quality.filesize
+
+
 def art_summary(markup):
     colors = set(re.findall(r"#([0-9a-f]{6})", markup))
     rows = markup.count("\n") + 1 if markup else 0
@@ -73,7 +81,7 @@ def wait_valid(dt):
     log(f"valid: {len(media.entries)} items, {len(media.invalid)} invalid")
     app.download_button.dispatch("on_release")
     quality = pick_quality(getattr(media.options, KIND), VALUE)
-    state["estimate"] = quality.filesize
+    state["estimate"] = shown_size(quality)
     app.on_quality_select(KIND, quality)
     Clock.schedule_once(confirm, 0.5)
 
@@ -134,10 +142,10 @@ original_show_item = app.show_item
 
 def show_item(item):
     original_show_item(item)
-    ok = bool(item.extra)
-    state["arts"].append((item.title, ok))
+    markup, cols, rows = item.extra or ("", 0, 0)
+    state["arts"].append((item.title, bool(markup)))
     state["item"] = item.position
-    log(f"[{item.position}/{item.total}] {item.title!r} by {item.artist!r} art: {art_summary(item.extra or '')}")
+    log(f"[{item.position}/{item.total}] {item.title!r} by {item.artist!r} art {cols}x{rows}: {art_summary(markup)}")
 
 
 original_draw_bar = app.draw_bar

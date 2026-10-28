@@ -20,7 +20,7 @@ if result is None:
 print(f"validated in {perf_counter() - start:.1f}s, {len(result.entries)} items")
 
 with ThreadPoolExecutor(max_workers=media.WORKERS) as executor:
-    list(executor.map(media._extract_entry, [e for e in result.entries if e.info is None]))
+    list(executor.map(media.extract_entry, [e for e in result.entries if e.info is None]))
 
 items = [build_quality_options(e.info) for e in result.entries if e.info]
 if any(host in url for host in media.AUDIO_ONLY_HOSTS):

@@ -142,15 +142,15 @@ def build_playlist_options(
 
 def pick_quality(qualities: list, target: int):
     """
-    Same quality, else best below, else closest above
+    Same quality, else closest above, else best below
     """
-    below = [q for q in qualities if q.value <= target]
-    if below:
-        return max(below, key=lambda q: q.value)
-
-    above = [q for q in qualities if q.value > target]
+    above = [q for q in qualities if q.value >= target]
     if above:
         return min(above, key=lambda q: q.value)
+
+    below = [q for q in qualities if q.value < target]
+    if below:
+        return max(below, key=lambda q: q.value)
 
     return None
 

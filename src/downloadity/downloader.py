@@ -1,4 +1,6 @@
+import copy
 import os
+from typing import Optional
 
 import yt_dlp
 
@@ -11,8 +13,10 @@ def download_audio(
     quality: AudioQuality,
     output_dir: str = ".",
     on_progress=None,
+    filename: Optional[str] = None,
+    info: Optional[dict] = None,
 ) -> dict:
-    outtmpl = os.path.join(output_dir, "%(title)s.%(ext)s")
+    outtmpl = _outtmpl(output_dir, filename)
 
     options = {
         "quiet": True,
@@ -41,6 +45,7 @@ def download_audio(
         url,
         options,
         on_progress=on_progress,
+        info=info,
     )
 
 
@@ -49,8 +54,10 @@ def download_video(
     quality: VideoQuality,
     output_dir: str = ".",
     on_progress=None,
+    filename: Optional[str] = None,
+    info: Optional[dict] = None,
 ) -> dict:
-    outtmpl = os.path.join(output_dir, "%(title)s.%(ext)s")
+    outtmpl = _outtmpl(output_dir, filename)
 
     options = {
         "quiet": True,
@@ -72,7 +79,13 @@ def download_video(
         url,
         options,
         on_progress=on_progress,
+        info=info,
     )
+
+
+def _outtmpl(output_dir: str, filename: Optional[str]) -> str:
+    name = filename.replace("%", "%%") if filename else "%(title)s"
+    return os.path.join(output_dir, f"{name}.%(ext)s")
 
 
 def _run_download(
@@ -80,6 +93,7 @@ def _run_download(
     options: dict,
     on_progress=None,
     max_retries: int = 2,
+    info: Optional[dict] = None,
 ) -> dict:
     if on_progress:
         options["progress_hooks"] = [on_progress]
@@ -87,7 +101,11 @@ def _run_download(
     for attempt in range(max_retries + 1):
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
-                ydl.extract_info(url, download=True)
+                # Embedded items have no page to re-extract
+                if info:
+                    ydl.process_ie_result(copy.deepcopy(info), download=True)
+                else:
+                    ydl.extract_info(url, download=True)
             return {"success": True}
 
         except yt_dlp.utils.DownloadError as e:
