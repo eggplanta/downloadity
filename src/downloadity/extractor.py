@@ -86,6 +86,8 @@ def _extract_info(url: str, options: dict) -> dict:
 def _extract_flat_item(info: dict) -> dict:
     # Instagram carousels come fully extracted
     return {
+        "id": info.get("id"),
+        "site": info.get("ie_key") or info.get("extractor_key"),
         "title": info.get("title"),
         "url": info.get("url") or info.get("webpage_url"),
         "duration": info.get("duration"),

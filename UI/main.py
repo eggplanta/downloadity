@@ -18,8 +18,9 @@ from kivy.uix.modalview import ModalView
 from kivy.uix.floatlayout import FloatLayout
 from kivy.utils import escape_markup, platform
 
+from downloadity import library
 from downloadity.download_queue import DownloadQueue
-from downloadity.media import resolve_media
+from downloadity.media import resolve_media, subset
 from ascii_art import cover_markup
 
 Window.clearcolor = (0, 0, 0, 1)
@@ -97,7 +98,7 @@ def vertical_line():
 
     def redraw(_instance, size):
         label.text_size = size
-        label.text = "\n".join(["│"] * max(1, int(size[1] / lh)))
+        label.text = "\n".join(["│"] * max(1, math.ceil(size[1] / lh)))
 
     label.bind(size=redraw)
     return label
@@ -125,12 +126,13 @@ def quality_column():
     column = BoxLayout(
         orientation="vertical",
         size_hint_y=None,
-        padding=[0, dp(24), 0, 0],
-        spacing=dp(28),
+        padding=[0, dp(36), 0, dp(12)],
+        spacing=dp(34),
     )
     column.bind(minimum_height=column.setter("height"))
 
-    scroll = ScrollView(do_scroll_x=False)
+    # Bar shows only while scrolling
+    scroll = ScrollView(do_scroll_x=False, bar_inactive_color=(0, 0, 0, 0))
     scroll.add_widget(column)
     return scroll, column
 
@@ -196,11 +198,9 @@ class AsciiButton(Button):
         rows = self.rows or max(3, int(self.height / line_h))
         inner = cols - 2
 
-        lines = [" " + "_" + "─" * (inner-4) + "_" + " "]
-        lines += ["┌" + " " * (inner - 1) + "┐"]
-        lines += ["|" + " " * inner + "|"] * (rows - 4)
-        lines += ["└" + " " * (inner - 1) + "┘"]
-        lines += ["‾" + "─" * (inner-4) + "‾" + " "]
+        lines = ["┌" + "─" * inner + "┐"]
+        lines += ["│" + " " * inner + "│"] * (rows - 2)
+        lines += ["└" + "─" * inner + "┘"]
         self.border_label.text = "\n".join(lines)
 
     def update_color(self, *args):
@@ -330,7 +330,7 @@ class DownloadityApp(App):
         if url != self.link_input.text.strip():
             return
 
-        self.media = media
+        self.media = self.checked_media = media
         valid = media is not None
         color = (0, 1, 0, 1) if valid else (1, 0, 0, 1)
 
@@ -374,6 +374,40 @@ class DownloadityApp(App):
         self.buttons.opacity = 1
 
     def on_download_press(self, *args):
+        self.media = self.checked_media
+        self.overwrite = False
+
+        # Known playlists offer only the new items
+        folder = self.media.is_playlist and library.find_folder(DOWNLOAD_ROOT, self.media.playlist_id)
+        if folder:
+            self.ask_repeat(folder)
+        else:
+            self.show_qualities()
+
+    def ask_repeat(self, folder):
+        kind = library.previous_kind(folder)
+        new = library.new_entries(folder, kind, self.media.entries)
+        count = f"{len(new)} new item(s)" if new else "no new items"
+
+        popup = AsciiPopup(
+            f"this playlist was\ndownloaded before:\n\n{count}",
+            [
+                ("all", self.repeat_all),
+                ("only new", lambda: self.repeat_new(new)),
+            ],
+        )
+        popup.buttons[1].disabled = not new
+        popup.open()
+
+    def repeat_all(self):
+        self.overwrite = True
+        self.show_qualities()
+
+    def repeat_new(self, entries):
+        self.media = subset(self.media, entries)
+        self.show_qualities()
+
+    def show_qualities(self):
         options = self.media.options
 
         has_options = options.audio or options.video
@@ -387,15 +421,15 @@ class DownloadityApp(App):
         column.clear_widgets()
 
         for quality in sorted(qualities, key=lambda q: q.value, reverse=True):
-            text = quality.label
+            text = escape_markup(f"[ {quality.label} ]")
             if quality.filesize_label:
-                text += f"\n[size={int(dp(14))}]({quality.filesize_label})[/size]"
+                text += f"\n[size={int(dp(15))}]({quality.filesize_label})[/size]"
 
             button = AsciiButton(
                 text,
                 border=False,
                 size_hint_y=None,
-                height=dp(64),
+                height=dp(58),
                 font_size=dp(20),
             )
             button.bind(
@@ -521,6 +555,7 @@ class DownloadityApp(App):
             listener=self,
             prepare_extra=self.make_art,
             cut=cut,
+            overwrite=self.overwrite,
         )
         threading.Thread(target=self.run_queue, args=(queue,), daemon=True).start()
 
@@ -620,7 +655,7 @@ class DownloadityApp(App):
         ).open()
 
     def reset_home(self):
-        self.media = None
+        self.media = self.checked_media = None
         self.link_input.text = ""
         self.screens.current = "home"
 
@@ -678,7 +713,7 @@ class DownloadityApp(App):
             color=(1, 1, 1, 1),
             halign="left",
             valign="middle",
-            size_hint=(0.6, None),
+            size_hint=(None, None),
             font_name="DejaVuSansMono",
             font_size=dp(15),
             height=dp(18),
@@ -693,7 +728,7 @@ class DownloadityApp(App):
 
         link_frame = BoxLayout(
             orientation="vertical",
-            size_hint=(0.8, None),
+            size_hint=(None, None),
             height=dp(60),
             pos_hint={"center_x": 0.5},
         )
@@ -778,6 +813,13 @@ class DownloadityApp(App):
 
         root.add_widget(link_frame)
 
+        def fit_link(_instance, width):
+            # Box a bit past the label
+            link_label.width = (width - dp(40)) * 0.6
+            link_frame.width = link_label.width + dp(40)
+
+        root.bind(width=fit_link)
+
         self.link_input.bind(text=self.on_text_change)
 
         # space
@@ -797,7 +839,7 @@ class DownloadityApp(App):
             width=dp(280),
             pos_hint={"center_x": 0.5},
             font_size=dp(18),
-            rows=7,
+            rows=5,
         )
 
         self.download_button.bind(on_release=self.on_download_press)
@@ -846,11 +888,17 @@ class DownloadityApp(App):
             padding=[dp(20), dp(60), dp(20), dp(20)],
         )
 
-        header = BoxLayout(size_hint_y=None, height=lh * 3)
-        header.add_widget(mono_label("AUDIO", dp(24)))
+        table = BoxLayout(
+            orientation="vertical",
+            size_hint_x=0.8,
+            pos_hint={"center_x": 0.5},
+        )
+
+        header = BoxLayout(size_hint_y=None, height=lh * 5)
+        header.add_widget(mono_label("♪ AUDIO", dp(28)))
         header.add_widget(vertical_line())
-        header.add_widget(mono_label("VIDEO", dp(24)))
-        root.add_widget(header)
+        header.add_widget(mono_label("▶ VIDEO", dp(28)))
+        table.add_widget(header)
 
         dash_width = char_width("─", LINE_FONT)
         divider = mono_label("", LINE_FONT, size_hint_y=None, height=lh)
@@ -860,7 +908,7 @@ class DownloadityApp(App):
             divider.text = "─" * side + "┼" + "─" * side
 
         divider.bind(width=redraw_divider)
-        root.add_widget(divider)
+        table.add_widget(divider)
 
         body = BoxLayout()
         audio_scroll, self.audio_column = quality_column()
@@ -868,7 +916,9 @@ class DownloadityApp(App):
         body.add_widget(audio_scroll)
         body.add_widget(vertical_line())
         body.add_widget(video_scroll)
-        root.add_widget(body)
+        table.add_widget(body)
+
+        root.add_widget(table)
 
         self.qualities_status = mono_label(
             "",

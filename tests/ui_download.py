@@ -2,6 +2,7 @@
 Drives the app: link -> quality -> confirm -> download -> OK
 Usage: ui_download.py url audio|video kbps|height [shots name] [start end]
 Start and end (min:sec) cut a single video
+REPEAT=all|new answers the known playlist popup
 Shots and files go to tests/output, per shots name
 """
 import os
@@ -22,6 +23,7 @@ from downloadity.formats import VIDEO_MARGIN, VideoQuality, pick_quality
 URL, KIND, VALUE = sys.argv[1], sys.argv[2], int(sys.argv[3])
 NAME = sys.argv[4] if len(sys.argv) > 4 else "single"
 CUT = sys.argv[5:7] if len(sys.argv) > 6 else None
+REPEAT = os.environ.get("REPEAT", "new")
 SHOTS = paths.OUTPUT / "shots" / NAME
 SHOTS.mkdir(parents=True, exist_ok=True)
 main.DOWNLOAD_ROOT = str(paths.OUTPUT / "downloadity" / NAME)
@@ -83,6 +85,21 @@ def wait_valid(dt):
     media = app.media
     log(f"valid: {len(media.entries)} items, {len(media.invalid)} invalid")
     app.download_button.dispatch("on_release")
+    Clock.schedule_once(repeat, 0.5)
+
+
+def repeat(dt):
+    p = popup()
+    if p:
+        log(f"repeat popup: {popup_text(p)[0]!r} only new disabled={p.buttons[1].disabled}")
+        p.export_to_png(str(SHOTS / "popup_repeat.png"))
+        press(p, "only new" if REPEAT == "new" else "all")
+    Clock.schedule_once(choose_quality, 0.5)
+
+
+def choose_quality(dt):
+    media = app.media
+    log(f"downloading {len(media.entries)} items")
     quality = pick_quality(getattr(media.options, KIND), VALUE)
     state["estimate"] = None if CUT else shown_size(quality)
     app.on_quality_select(KIND, quality)

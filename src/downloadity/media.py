@@ -1,3 +1,5 @@
+import dataclasses
+import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Optional, Union
@@ -30,6 +32,7 @@ class MediaEntry:
     title: Optional[str] = None
     invalid: bool = False
     embedded: bool = False
+    item_id: Optional[str] = None
 
 
 @dataclass
@@ -40,6 +43,8 @@ class Media:
     options: Union[QualityOptions, PlaylistOptions]
     entries: list[MediaEntry] = field(default_factory=list)
     invalid: list[MediaEntry] = field(default_factory=list)
+    playlist_id: Optional[str] = None
+    samples: list[QualityOptions] = field(default_factory=list)
 
 
 # Main function
@@ -57,10 +62,13 @@ def resolve_media(url: str) -> Optional[Media]:
                 duration=track.duration_ms / 1000,
                 spotify_track=track,
                 title=f"{', '.join(track.artists)} - {track.title}",
+                item_id=track.id and f"spotify:{track.id}",
             )
             for track in tracks
         ]
         is_playlist = "/track/" not in url
+        match = re.search(r"/(playlist|album)/([A-Za-z0-9]+)", url)
+        playlist_id = match and f"spotify:{match.group(1)}:{match.group(2)}"
     else:
         info = extractor.extract(url, flat="in_playlist")
 
@@ -78,15 +86,18 @@ def resolve_media(url: str) -> Optional[Media]:
                     invalid=_is_unavailable(e),
                     info=e["item"] and {"type": "video", **e["item"]},
                     embedded=bool(e["item"]),
+                    item_id=_item_id(e),
                 )
                 for e in info["entries"]
                 if e.get("url")
             ]
             is_playlist = True
+            playlist_id = f"{(info.get('extractor_key') or 'site').lower()}:{info.get('id')}"
         else:
             title = None
             entries = [MediaEntry(url=url, duration=info.get("duration"), info=info)]
             is_playlist = False
+            playlist_id = None
 
     if not entries:
         return None
@@ -113,7 +124,17 @@ def resolve_media(url: str) -> Optional[Media]:
         options=options,
         entries=[e for e in entries if not e.invalid],
         invalid=[e for e in entries if e.invalid],
+        playlist_id=playlist_id if is_playlist else None,
+        samples=sampled,
     )
+
+
+def subset(media: Media, entries: list[MediaEntry]) -> Media:
+    """
+    Same playlist, fewer items, sizes re-estimated
+    """
+    options = build_playlist_options(media.samples, _total_duration(entries, media.samples))
+    return dataclasses.replace(media, options=options, entries=entries)
 
 
 def caption_title(info: dict) -> Optional[str]:
@@ -175,6 +196,12 @@ def _next_unused(entries: list[MediaEntry], index: int, used: set) -> Optional[i
         if i not in used and not entries[i].invalid:
             return i
     return None
+
+
+def _item_id(entry: dict) -> Optional[str]:
+    if not entry.get("id"):
+        return None
+    return f"{(entry.get('site') or 'site').lower()}:{entry['id']}"
 
 
 def _is_unavailable(entry: dict) -> bool:

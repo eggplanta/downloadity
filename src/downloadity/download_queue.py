@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .downloader import cut_video, download_audio, download_video
+from . import library
 from .extractor import VIDEO_LONG_SIDES
 from .formats import build_quality_options, pick_quality
 from .media import AUDIO_ONLY_HOSTS, Media, MediaEntry, caption_title, extract_entry
@@ -40,9 +41,10 @@ class DownloadQueue:
     Blocked items go to the end of the queue once
     """
 
-    def __init__(self, media: Media, kind: str, value: int, root_dir: str, listener, prepare_extra=None, cut=None):
+    def __init__(self, media: Media, kind: str, value: int, root_dir: str, listener, prepare_extra=None, cut=None, overwrite=False):
         self.media = media
         self.cut = cut
+        self.overwrite = overwrite
         self.kind = kind
         self.value = value
         self.listener = listener
@@ -52,9 +54,14 @@ class DownloadQueue:
 
         self.output_dir = root_dir
         if media.is_playlist:
-            self.output_dir = os.path.join(root_dir, safe_name(media.title or "playlist"))
+            self.folder_name = safe_name(media.title or "playlist")
+            found = library.find_folder(root_dir, media.playlist_id)
+            self.output_dir = found or os.path.join(root_dir, self.folder_name)
 
     def run(self) -> None:
+        # Renamed playlists rename their folder
+        if self.media.is_playlist and os.path.isdir(self.output_dir):
+            self.output_dir = library.rename_folder(self.output_dir, self.folder_name)
         os.makedirs(self.output_dir, exist_ok=True)
         self._run_pairs()
 
@@ -190,7 +197,7 @@ class DownloadQueue:
 
         expected = self._expected_size(quality)
         report = _monotonic(report)
-        options = {}
+        options = {"overwrite": self.overwrite}
 
         # Audio bar includes the mp3 conversion
         if self.kind == "audio":
@@ -239,6 +246,8 @@ class DownloadQueue:
 
         if result["success"] and self.cut:
             result = self._cut(base, cut_progress.cut)
+        if result["success"] and self.media.is_playlist:
+            self._record(entry, result.get("path"))
 
         if not result["success"] and is_block(result.get("error") or ""):
             result["blocked"] = True
@@ -246,6 +255,18 @@ class DownloadQueue:
         if not entry.embedded:
             entry.info = None
         return result
+
+    def _record(self, entry: MediaEntry, path: Optional[str]) -> None:
+        """
+        Notes the file, drops a renamed old one
+        """
+        if not path:
+            return
+
+        old = library.recorded_file(self.output_dir, self.kind, entry.item_id)
+        if old and os.path.basename(old) != os.path.basename(path) and os.path.exists(old):
+            os.remove(old)
+        library.record(self.output_dir, self.kind, entry.item_id, path, self.media.playlist_id, self.media.source_url)
 
     def _cut(self, base: str, on_cut) -> dict:
         """

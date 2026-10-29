@@ -17,6 +17,7 @@ def download_audio(
     filename: Optional[str] = None,
     info: Optional[dict] = None,
     on_postprocess=None,
+    overwrite: bool = False,
 ) -> dict:
     outtmpl = _outtmpl(output_dir, filename)
 
@@ -26,6 +27,7 @@ def download_audio(
         "logger": SilentLogger(),
         "format": quality.format_id,
         "outtmpl": outtmpl,
+        "overwrites": overwrite,
 
         "retries": 3,
         "fragment_retries": 3,
@@ -60,6 +62,7 @@ def download_video(
     on_progress=None,
     filename: Optional[str] = None,
     info: Optional[dict] = None,
+    overwrite: bool = False,
 ) -> dict:
     outtmpl = _outtmpl(output_dir, filename)
 
@@ -69,6 +72,7 @@ def download_video(
         "logger": SilentLogger(),
         "format": quality.download_format_id,
         "outtmpl": outtmpl,
+        "overwrites": overwrite,
         "merge_output_format": "mp4",
 
         "retries": 3,
@@ -130,6 +134,15 @@ def _run_download(
     if on_progress:
         options["progress_hooks"] = [on_progress]
 
+    # Last postprocessor holds the final path
+    final = {}
+
+    def capture(d):
+        if d["status"] == "finished" and d.get("info_dict", {}).get("filepath"):
+            final["path"] = d["info_dict"]["filepath"]
+
+    options["postprocessor_hooks"] = list(options.get("postprocessor_hooks") or []) + [capture]
+
     for attempt in range(max_retries + 1):
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
@@ -141,7 +154,7 @@ def _run_download(
                     ydl.process_ie_result(fresh, download=True)
                 else:
                     ydl.extract_info(url, download=True)
-            return {"success": True}
+            return {"success": True, "path": final.get("path")}
 
         except yt_dlp.utils.DownloadError as e:
             # Unavailable videos get one retry

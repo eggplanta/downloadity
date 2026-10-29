@@ -47,6 +47,7 @@ class _SpotifyTrack:
     title: str
     artists: list[str]
     duration_ms: int
+    id: Optional[str] = None
 
     @property
     def search_queries(self) -> list[tuple[str, str]]:
@@ -83,6 +84,7 @@ def _track_from_data(data: SpotifyTrackData) -> _SpotifyTrack:
         title=data.name,
         artists=list(dict.fromkeys(artist.name for artist in data.artists)),
         duration_ms=data.duration_ms,
+        id=data.id,
     )
 
 
