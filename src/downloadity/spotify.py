@@ -48,6 +48,7 @@ class _SpotifyTrack:
     artists: list[str]
     duration_ms: int
     id: Optional[str] = None
+    cover_url: Optional[str] = None
 
     @property
     def search_queries(self) -> list[tuple[str, str]]:
@@ -79,12 +80,18 @@ def _spotify_client() -> SpotifyClient:
     return SpotifyClient(retry=_RETRY)
 
 
+def _cover_url(data: SpotifyTrackData) -> Optional[str]:
+    images = data.images or (data.album.images if data.album else ())
+    return max(images, key=lambda image: image.width or 0).url if images else None
+
+
 def _track_from_data(data: SpotifyTrackData) -> _SpotifyTrack:
     return _SpotifyTrack(
         title=data.name,
         artists=list(dict.fromkeys(artist.name for artist in data.artists)),
         duration_ms=data.duration_ms,
         id=data.id,
+        cover_url=_cover_url(data),
     )
 
 

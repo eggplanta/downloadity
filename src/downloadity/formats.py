@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Union
 
 VIDEO_MARGIN = 1.05
 
@@ -10,14 +10,15 @@ class AudioQuality:
     format_id: str
     bitrate: int
     filesize: Optional[int]
+    codec: str = "m4a"
 
     @property
-    def value(self) -> int:
-        return self.bitrate
+    def value(self) -> str:
+        return self.codec
 
     @property
     def label(self) -> str:
-        return f"{self.bitrate} kbps"
+        return f"{self.codec.upper()} {self.bitrate} kbps"
 
     @property
     def filesize_label(self) -> Optional[str]:
@@ -72,12 +73,15 @@ class QualityOptions:
 @dataclass
 class PlaylistQuality:
     kind: str
-    value: int
+    value: Union[int, str]
     filesize: Optional[int]
+    bitrate: Optional[int] = None
 
     @property
     def label(self) -> str:
-        return f"{self.value} kbps" if self.kind == "audio" else f"{self.value}p"
+        if self.kind == "audio":
+            return f"{self.value.upper()} {self.bitrate} kbps"
+        return f"{self.value}p"
 
     @property
     def filesize_label(self) -> Optional[str]:
@@ -116,16 +120,17 @@ def build_playlist_options(
     Sampled MB/second x total duration
     Video gets +5% safety margin
     """
-    bitrates = sorted({q.value for s in samples for q in s.audio})
+    codecs = sorted({q.value for s in samples for q in s.audio})
     heights = sorted({q.value for s in samples for q in s.video})
 
     audio = [
         PlaylistQuality(
             kind="audio",
-            value=bitrate,
-            filesize=_estimate_size(samples, "audio", bitrate, total_duration),
+            value=codec,
+            filesize=_estimate_size(samples, "audio", codec, total_duration),
+            bitrate=_average_bitrate(samples, codec),
         )
-        for bitrate in bitrates
+        for codec in codecs
     ]
 
     video = [
@@ -143,7 +148,12 @@ def build_playlist_options(
 def pick_quality(qualities: list, target: int):
     """
     Same quality, else closest above, else best below
+    Audio targets are codecs
     """
+    if isinstance(target, str):
+        same = [q for q in qualities if q.value == target]
+        return (same or qualities or [None])[0]
+
     above = [q for q in qualities if q.value >= target]
     if above:
         return min(above, key=lambda q: q.value)
@@ -160,7 +170,7 @@ def pick_quality(qualities: list, target: int):
 def _estimate_size(
     samples: list[QualityOptions],
     kind: str,
-    value: int,
+    value: Union[int, str],
     total_duration: float,
 ) -> Optional[int]:
     size = 0
@@ -171,9 +181,8 @@ def _estimate_size(
         if quality is None or not sample.duration:
             continue
 
-        # Final mp3 uses the picked bitrate
         if kind == "audio":
-            item_size = quality.bitrate * 1000 / 8 * sample.duration
+            item_size = quality.filesize or quality.bitrate * 1000 / 8 * sample.duration
         else:
             item_size = quality.total_filesize
 
@@ -188,12 +197,18 @@ def _estimate_size(
     return int(size / duration * total_duration * margin)
 
 
+def _average_bitrate(samples: list[QualityOptions], codec: str) -> int:
+    bitrates = [q.bitrate for s in samples for q in s.audio if q.value == codec]
+    return round(sum(bitrates) / len(bitrates))
+
+
 def _build_audio_qualities(raw_audio: list) -> list[AudioQuality]:
     return [
         AudioQuality(
             format_id=item["format_id"],
             bitrate=item["bitrate"],
             filesize=item.get("filesize"),
+            codec=item.get("codec", "m4a"),
         )
         for item in raw_audio
         if item.get("format_id") is not None
@@ -230,7 +245,9 @@ def _pick_best_audio(audio_qualities: list[AudioQuality]) -> Optional[AudioQuali
     if not audio_qualities:
         return None
 
-    return max(audio_qualities, key=lambda a: a.bitrate)
+    # AAC keeps mp4 files compatible
+    aac = [a for a in audio_qualities if a.codec == "m4a"]
+    return max(aac or audio_qualities, key=lambda a: a.bitrate)
 
 
 def _human_filesize(num_bytes: Optional[int]) -> Optional[str]:

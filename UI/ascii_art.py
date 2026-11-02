@@ -1,6 +1,9 @@
 import os
+import ssl
 import tempfile
 import urllib.request
+
+import certifi
 
 from kivy.core.image import ImageLoader
 
@@ -18,7 +21,9 @@ def cover_markup(info: dict, cols: int, rows: int, aspect: float = 1) -> str:
     if not url:
         return ""
 
-    with urllib.request.urlopen(url, timeout=10) as response:
+    # Android Python lacks system certificates
+    context = ssl.create_default_context(cafile=certifi.where())
+    with urllib.request.urlopen(url, timeout=10, context=context) as response:
         data = response.read()
 
     fd, path = tempfile.mkstemp(suffix=".jpg")

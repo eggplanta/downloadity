@@ -8,6 +8,11 @@ import yt_dlp
 from .extractor import SilentLogger
 from .formats import AudioQuality, VideoQuality
 
+# Android points this at the bundled binary
+FFMPEG = "ffmpeg"
+# Work files stay here until done
+TEMP_DIR = None
+
 
 def download_audio(
     url: str,
@@ -39,11 +44,14 @@ def download_audio(
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
+                "preferredcodec": quality.codec,
                 "preferredquality": str(quality.bitrate),
             }
         ],
     }
+    # Bundled ffmpeg names this muxer ogg
+    if quality.codec == "opus":
+        options["postprocessor_args"] = {"extractaudio": ["-f", "ogg"]}
     if on_postprocess:
         options["postprocessor_hooks"] = [on_postprocess]
 
@@ -98,7 +106,7 @@ def cut_video(source: str, start: float, end: float, output: str, on_progress=No
     """
     length = end - start
     command = [
-        "ffmpeg", "-y", "-v", "error", "-nostats",
+        FFMPEG, "-y", "-v", "error", "-nostats",
         "-ss", str(start), "-t", str(length), "-i", source,
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "160k",
@@ -133,6 +141,12 @@ def _run_download(
 ) -> dict:
     if on_progress:
         options["progress_hooks"] = [on_progress]
+    if FFMPEG != "ffmpeg":
+        options["ffmpeg_location"] = FFMPEG
+    if TEMP_DIR:
+        home, name = os.path.split(options["outtmpl"])
+        options["outtmpl"] = name
+        options["paths"] = {"home": home, "temp": TEMP_DIR}
 
     # Last postprocessor holds the final path
     final = {}
@@ -154,7 +168,11 @@ def _run_download(
                     ydl.process_ie_result(fresh, download=True)
                 else:
                     ydl.extract_info(url, download=True)
-            return {"success": True, "path": final.get("path")}
+            path = final.get("path")
+            # Hooks see the path before moving
+            if TEMP_DIR and path and path.startswith(TEMP_DIR):
+                path = os.path.join(options["paths"]["home"], os.path.relpath(path, TEMP_DIR))
+            return {"success": True, "path": path}
 
         except yt_dlp.utils.DownloadError as e:
             # Unavailable videos get one retry

@@ -41,6 +41,7 @@ def extract(url: str, flat: str | bool = False) -> dict:
     try:
         info = throttle.run(lambda: _extract_info(url, options))
     except yt_dlp.utils.DownloadError as e:
+        print("DEBUG extract error:", e)
         return {
             "type": "error",
             "message": str(e),
@@ -98,7 +99,7 @@ def _extract_flat_item(info: dict) -> dict:
 
 def _extract_item(info: dict) -> dict:
 
-    formats = info.get("formats", [])
+    formats = _without_dubs(info.get("formats", []))
     duration = info.get("duration")
 
     return {
@@ -109,39 +110,53 @@ def _extract_item(info: dict) -> dict:
     }
 
 
-def _get_audio_formats(formats: list, duration) -> list:
+def _without_dubs(formats: list) -> list:
+    # Original audio ranks highest
+    ranks = [_language_rank(fmt) for fmt in formats if fmt.get("acodec") != "none"]
+    best = max(ranks, default=-1)
+    return [fmt for fmt in formats if fmt.get("acodec") == "none" or _language_rank(fmt) == best]
 
-    best_by_bitrate = {}
+
+def _language_rank(fmt: dict) -> int:
+    rank = fmt.get("language_preference")
+    return -1 if rank is None else rank
+
+
+def _get_audio_formats(formats: list, duration) -> list:
+    """
+    Best Opus and best M4A
+    Other codecs are converted to M4A
+    """
+    best_by_codec = {}
 
     for fmt in formats:
-        if fmt.get("vcodec") != "none":
+        if fmt.get("vcodec") != "none" or not fmt.get("abr"):
             continue
 
-        abr = fmt.get("abr")
-        if not abr:
-            continue
+        codec = _audio_codec(fmt)
+        existing = best_by_codec.get(codec)
+        if existing is None or _audio_rank(fmt) > _audio_rank(existing):
+            best_by_codec[codec] = fmt
 
-        bitrate = _standard_bitrate(abr)
-
-        existing = best_by_bitrate.get(bitrate)
-        if existing is None:
-            best_by_bitrate[bitrate] = fmt
-        else:
-            existing_size = _filesize(existing, duration) or 0
-            new_size = _filesize(fmt, duration) or 0
-            if new_size and (not existing_size or new_size < existing_size):
-                best_by_bitrate[bitrate] = fmt
-
-    result = []
-    for bitrate in sorted(best_by_bitrate):
-        fmt = best_by_bitrate[bitrate]
-        result.append({
+    return [
+        {
             "format_id": fmt.get("format_id"),
-            "bitrate": bitrate,
+            "bitrate": _standard_bitrate(fmt["abr"]),
             "filesize": _filesize(fmt, duration),
-        })
+            "codec": codec,
+        }
+        for codec, fmt in best_by_codec.items()
+    ]
 
-    return result
+
+def _audio_codec(fmt: dict) -> str:
+    return "opus" if "opus" in (fmt.get("acodec") or "") else "m4a"
+
+
+def _audio_rank(fmt: dict) -> tuple:
+    native = (fmt.get("acodec") or "").startswith(("opus", "mp4a"))
+    drc = fmt.get("has_drc") or "drc" in str(fmt.get("format_id"))
+    return (native, not drc, fmt["abr"])
 
 
 def _get_video_formats(formats: list, duration) -> list:
@@ -157,7 +172,7 @@ def _get_video_formats(formats: list, duration) -> list:
 
         height = _standard_height(fmt)
 
-        # Prefer formats that report their size
+        # Prefer compatible codecs, then known sizes
         existing = best_by_height.get(height)
         if existing is None or _video_rank(fmt) > _video_rank(existing):
             best_by_height[height] = fmt
@@ -177,7 +192,15 @@ def _get_video_formats(formats: list, duration) -> list:
 
 def _video_rank(fmt: dict) -> tuple:
     known_size = bool(fmt.get("filesize") or fmt.get("filesize_approx"))
-    return (known_size, fmt.get("tbr") or 0)
+    return (_video_codec_rank(fmt), known_size, fmt.get("tbr") or 0)
+
+
+def _video_codec_rank(fmt: dict) -> int:
+    # H.264 first, it plays everywhere
+    codec = fmt.get("vcodec") or ""
+    if codec.startswith(("avc1", "h264")):
+        return 2
+    return 1 if codec.startswith(("vp9", "vp09")) else 0
 
 
 def _standard_bitrate(abr: float) -> int:

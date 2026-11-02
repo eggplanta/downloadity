@@ -2,6 +2,7 @@ import logging
 import math
 import os
 import threading
+import time
 
 from kivy.app import App
 from kivy.core.window import Window
@@ -9,7 +10,7 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.metrics import dp
 from kivy.uix.textinput import TextInput
-from kivy.core.text import Label as CoreLabel
+from kivy.core.text import Label as CoreLabel, LabelBase
 from kivy.clock import Clock
 from kivy.uix.button import Button
 from kivy.uix.scrollview import ScrollView
@@ -18,17 +19,26 @@ from kivy.uix.modalview import ModalView
 from kivy.uix.floatlayout import FloatLayout
 from kivy.utils import escape_markup, platform
 
-from downloadity import library
+from downloadity import downloader, library
 from downloadity.download_queue import DownloadQueue
 from downloadity.media import resolve_media, subset
+from downloadity.throttle import YoutubeBlockedError
 from ascii_art import cover_markup
 
 Window.clearcolor = (0, 0, 0, 1)
+# Focused field stays above keyboard
+Window.softinput_mode = "below_target"
+
+# Bundled, Android has no DejaVu
+LabelBase.register(
+    "DejaVuSansMono",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "DejaVuSansMono.ttf"),
+)
 
 # Kivy logs third-party debug otherwise
 logging.getLogger().setLevel(logging.WARNING)
 
-version = "v 0.1.0"
+version = "v 1.0.0"
 
 LINE_FONT = dp(12)
 CHECKING_FRAMES = ("checking ..", "checking. .", "checking.. ", "checking...")
@@ -42,9 +52,82 @@ VIDEO_ASPECT = 16 / 9
 VIDEO_ASPECTS = (0.5, 2.4)
 
 if platform == "android":
-    DOWNLOAD_ROOT = "/storage/emulated/0/downloadity"
+    from jnius import autoclass, cast
+
+    DOWNLOAD_ROOT = "/storage/emulated/0/Download/downloadity"
+
+    # Bundled ffmpeg ships as native lib
+    activity = autoclass("org.kivy.android.PythonActivity").mActivity
+    lib_dir = activity.getApplicationInfo().nativeLibraryDir
+    downloader.FFMPEG = os.path.join(lib_dir, "libffmpeg.so")
+    # Internal storage, avoids media scans
+    downloader.TEMP_DIR = os.path.join(activity.getCacheDir().getAbsolutePath(), "work")
+
+    from android.runnable import run_on_ui_thread
+
+    @run_on_ui_thread
+    def clear_system_bars():
+        # No scrim, light icons on black
+        window = activity.getWindow()
+        sdk = autoclass("android.os.Build$VERSION").SDK_INT
+        if sdk >= 29:
+            window.setNavigationBarContrastEnforced(False)
+            window.setStatusBarContrastEnforced(False)
+        window.setNavigationBarColor(autoclass("android.graphics.Color").BLACK)
+        window.setStatusBarColor(autoclass("android.graphics.Color").BLACK)
+        if sdk >= 30:
+            light = autoclass("android.view.WindowInsetsController")
+            flags = light.APPEARANCE_LIGHT_NAVIGATION_BARS | light.APPEARANCE_LIGHT_STATUS_BARS
+            window.getInsetsController().setSystemBarsAppearance(0, flags)
+    service = autoclass("io.github.eggplanta.downloadity.ServiceKeepalive")
+    power = activity.getSystemService(autoclass("android.content.Context").POWER_SERVICE)
+    wake_lock = power.newWakeLock(autoclass("android.os.PowerManager").PARTIAL_WAKE_LOCK, "downloadity:download")
+
+    def keep_alive(on):
+        # Network and CPU survive minimizing
+        if on:
+            service.start(activity, "", "downloadity", "downloading...", "")
+            if not wake_lock.isHeld():
+                wake_lock.acquire()
+        else:
+            service.stop(activity)
+            if wake_lock.isHeld():
+                wake_lock.release()
+
+    def ask_notifications():
+        from android.permissions import Permission, request_permissions
+        request_permissions([Permission.POST_NOTIFICATIONS])
+
+    def share_file(path):
+        # The media store grants shareable links
+        videos = autoclass("android.provider.MediaStore$Video$Media").EXTERNAL_CONTENT_URI
+        cursor = activity.getContentResolver().query(videos, ["_id"], "_data=?", [path], None)
+        found = cursor is not None and cursor.moveToFirst()
+        media_id = cursor.getLong(0) if found else None
+        if cursor is not None:
+            cursor.close()
+        if media_id is None:
+            return False
+
+        Intent = autoclass("android.content.Intent")
+        uri = autoclass("android.content.ContentUris").withAppendedId(videos, media_id)
+        intent = Intent(Intent.ACTION_SEND)
+        intent.setType("video/mp4")
+        intent.putExtra(Intent.EXTRA_STREAM, cast("android.os.Parcelable", uri))
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        activity.startActivity(Intent.createChooser(intent, cast("java.lang.CharSequence", autoclass("java.lang.String")("share video"))))
+        return True
 else:
     DOWNLOAD_ROOT = os.path.expanduser("~/Downloads/downloadity")
+
+    def keep_alive(on):
+        pass
+
+    def ask_notifications():
+        pass
+
+    def share_file(path):
+        return False
 
 LOGO = f"""
 ▗▄▖             ▝▜            ▐  ▝   ▗      
@@ -117,17 +200,53 @@ def parse_time(text):
     hours, minutes, seconds = [0] * (3 - len(values)) + values
     return hours * 3600 + minutes * 60 + seconds
 
+def wrap_path(path, width=26):
+    # Breaks only after a slash
+    lines = [""]
+    for part in path.replace("/", "/\0").split("\0"):
+        if lines[-1] and len(lines[-1]) + len(part) > width:
+            lines.append("")
+        lines[-1] += part
+    return "\n".join(lines)
+
 def format_time(seconds):
     hours, rest = divmod(int(seconds), 3600)
     minutes, secs = divmod(rest, 60)
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
 
+class TimeInput(TextInput):
+    """
+    Digits fill from the right
+    Colons stay fixed
+    """
+
+    def __init__(self, long=False, **kwargs):
+        super().__init__(**kwargs)
+        self.slots = 6 if long else 4
+        self.digits = ""
+        self.show_digits()
+
+    def insert_text(self, substring, from_undo=False):
+        typed = "".join(c for c in substring if c.isdigit())
+        self.digits = (self.digits + typed)[:self.slots]
+        self.show_digits()
+
+    def do_backspace(self, from_undo=False, mode="bkspc"):
+        self.digits = self.digits[:-1]
+        self.show_digits()
+
+    def show_digits(self):
+        padded = self.digits.rjust(self.slots, "0")
+        self.text = ":".join(padded[i:i + 2] for i in range(0, self.slots, 2))
+        self.foreground_color = (1, 1, 1, 1) if self.digits else GRAY
+        self.cursor = (len(self.text), 0)
+
 def quality_column():
     column = BoxLayout(
         orientation="vertical",
         size_hint_y=None,
-        padding=[0, dp(36), 0, dp(12)],
-        spacing=dp(34),
+        padding=[0, dp(30), 0, dp(12)],
+        spacing=dp(30),
     )
     column.bind(minimum_height=column.setter("height"))
 
@@ -275,6 +394,10 @@ class AsciiPopup(ModalView):
         return scroll
 
     def choose(self, callback):
+        # Hides the Android keyboard
+        for widget in self.walk():
+            if isinstance(widget, TextInput):
+                widget.focus = False
         self.dismiss()
         callback()
 
@@ -317,16 +440,20 @@ class DownloadityApp(App):
         )
 
     def check_link(self, url):
+        blocked = False
         try:
             media = resolve_media(url)
+        except YoutubeBlockedError:
+            media, blocked = None, True
         except Exception:
+            import traceback; traceback.print_exc()
             media = None
 
         Clock.schedule_once(
-            lambda dt: self.show_result(url, media)
+            lambda dt: self.show_result(url, media, blocked)
         )
 
-    def show_result(self, url, media):
+    def show_result(self, url, media, blocked=False):
         if url != self.link_input.text.strip():
             return
 
@@ -342,7 +469,13 @@ class DownloadityApp(App):
         ):
             widget.color = color
 
-        self.show_in_result_area(self.download_button if valid else None)
+        # Keyboard would hide the button
+        if valid:
+            self.link_input.focus = False
+        if blocked:
+            self.show_in_result_area(self.blocked_label)
+        else:
+            self.show_in_result_area(self.download_button if valid else None)
 
     def start_checking(self):
         if self.checking_event:
@@ -409,6 +542,7 @@ class DownloadityApp(App):
 
     def show_qualities(self):
         options = self.media.options
+        self.link_input.focus = False
 
         has_options = options.audio or options.video
         self.qualities_status.text = "" if has_options else "no options found"
@@ -423,14 +557,14 @@ class DownloadityApp(App):
         for quality in sorted(qualities, key=lambda q: q.value, reverse=True):
             text = escape_markup(f"[ {quality.label} ]")
             if quality.filesize_label:
-                text += f"\n[size={int(dp(15))}]({quality.filesize_label})[/size]"
+                text += f"\n[size={int(dp(13))}]({quality.filesize_label})[/size]"
 
             button = AsciiButton(
                 text,
                 border=False,
                 size_hint_y=None,
-                height=dp(58),
-                font_size=dp(20),
+                height=dp(52),
+                font_size=dp(17),
             )
             button.bind(
                 on_release=lambda _b, q=quality: self.on_quality_select(kind, q)
@@ -476,11 +610,11 @@ class DownloadityApp(App):
             row.add_widget(label)
             row.add_widget(mono_label("[", dp(15), size_hint_x=None, width=dp(12)))
 
-            field = TextInput(
+            field = TimeInput(
+                long=bool(duration and duration >= 3600),
                 multiline=False,
-                hint_text="min:sec",
-                hint_text_color=GRAY,
-                foreground_color=(1, 1, 1, 1),
+                input_type="number",
+                halign="center",
                 background_color=(0, 0, 0, 1),
                 cursor_color=(1, 1, 1, 1),
                 padding=[dp(6), dp(6)],
@@ -537,17 +671,21 @@ class DownloadityApp(App):
     #====================DOWNLOAD======================#
 
     def start_download(self, kind, quality, cut=None):
+        import time; self.debug_t0 = time.time(); print(f"DEBUG start {kind} {quality.label} items={len(self.media.entries)}", flush=True)
+        keep_alive(True)
         self.kind = kind
         self.total_items = len(self.media.entries)
         self.swap_player(self.build_video_column() if kind == "video" else self.build_music_column())
         self.show_item_placeholder()
         self.screens.current = "downloading"
 
-        self.elapsed = 0
+        # Clock pauses while minimized
+        self.started_at = time.monotonic()
+        self.ended_at = None
         self.timer_label.text = "00:00"
         self.timer_event = Clock.schedule_interval(self.tick_timer, 1)
 
-        queue = DownloadQueue(
+        queue = self.queue = DownloadQueue(
             self.media,
             kind,
             quality.value,
@@ -565,6 +703,10 @@ class DownloadityApp(App):
         except Exception as e:
             error = str(e)
             Clock.schedule_once(lambda dt: self.show_finished(0, [], queue.output_dir, error))
+        finally:
+            # UI thread sleeps while minimized
+            self.ended_at = time.monotonic()
+            keep_alive(False)
 
     def make_art(self, entry):
         info = entry.info["ytdlp_info"]
@@ -608,6 +750,7 @@ class DownloadityApp(App):
         self.draw_bar(0)
 
     def show_item(self, item):
+        import time; print(f"DEBUG item {item.position}/{item.total} t={time.time() - self.debug_t0:.1f} {item.title}", flush=True)
         markup, cols, rows = item.extra or ("", *self.art_dims(None))
         self.set_art(markup, cols, rows)
         self.song_label.text = escape_markup(item.title)
@@ -631,21 +774,37 @@ class DownloadityApp(App):
         )
 
     def tick_timer(self, dt):
-        self.elapsed += 1
-        minutes, seconds = divmod(self.elapsed, 60)
+        elapsed = int((self.ended_at or time.monotonic()) - self.started_at)
+        minutes, seconds = divmod(elapsed, 60)
         self.timer_label.text = f"{minutes:02d}:{seconds:02d}"
 
     def show_finished(self, done, failed, folder, error=None):
+        import time; print(f"DEBUG finished t={time.time() - self.debug_t0:.1f} done={done} failed={failed} folder={folder} error={error}", flush=True)
         self.timer_event.cancel()
+        self.tick_timer(0)
         self.draw_bar(1)
 
         if error:
             message = f"download failed\n\n{error}"
         else:
-            message = f"download finished!\n\nyour files are in:\n{folder}"
+            # Short path, no mid-word wrap
+            shown = wrap_path(folder.replace("/storage/emulated/0/", ""))
+            message = f"download finished!\n\nyour files are in:\n{shown}"
 
         after = lambda: self.show_failed(failed) if failed else self.reset_home()
-        AsciiPopup(escape_markup(message), [("OK", after)]).open()
+        buttons = [("OK", after)]
+
+        # Single videos can go straight out
+        path = self.queue.last_path
+        if self.kind == "video" and not self.media.is_playlist and path and not error:
+            buttons.insert(0, ("share", lambda: self.share(path)))
+        AsciiPopup(escape_markup(message), buttons).open()
+
+    def share(self, path):
+        if share_file(path):
+            self.reset_home()
+        else:
+            AsciiPopup("could not share\nthis file", [("OK", self.reset_home)]).open()
 
     def show_failed(self, failed):
         AsciiPopup(
@@ -662,6 +821,10 @@ class DownloadityApp(App):
 
     #======================BUILD=======================#
 
+    def on_start(self):
+        # Shows download progress when minimized
+        ask_notifications()
+
     def build(self):
         self.screens = ScreenManager(transition=NoTransition())
 
@@ -677,7 +840,22 @@ class DownloadityApp(App):
         downloading.add_widget(self.build_downloading())
         self.screens.add_widget(downloading)
 
-        return self.screens
+        # Keeps clear of system bars
+        self.frame = BoxLayout()
+        self.frame.add_widget(self.screens)
+        if platform == "android":
+            clear_system_bars()
+            Clock.schedule_once(self.fit_system_bars, 0.5)
+        return self.frame
+
+    def fit_system_bars(self, dt):
+        insets = activity.getWindow().getDecorView().getRootWindowInsets()
+        if insets is None:
+            Clock.schedule_once(self.fit_system_bars, 0.5)
+            return
+        top = insets.getSystemWindowInsetTop()
+        bottom = insets.getSystemWindowInsetBottom()
+        self.frame.padding = [0, top, 0, bottom]
 
     def build_home(self):
 
@@ -724,7 +902,8 @@ class DownloadityApp(App):
 
         # input box
 
-        dash_width = char_width("─", 12)
+        dash_width = char_width("─", dp(12))
+        pipe_width = char_width("│", dp(12))
 
         link_frame = BoxLayout(
             orientation="vertical",
@@ -737,7 +916,6 @@ class DownloadityApp(App):
             orientation="horizontal",
             size_hint=(1, None),
             height=dp(28),
-            padding=[dp(-4.5), 0],
             pos_hint={"center_x": 0.5},
         )
 
@@ -747,7 +925,7 @@ class DownloadityApp(App):
             font_name="DejaVuSansMono",
             font_size=dp(12),
             size_hint_x=None,
-            width=dp(16),
+            width=pipe_width,
         )
         self.pipe_left = pipe_left
 
@@ -767,7 +945,7 @@ class DownloadityApp(App):
             font_name="DejaVuSansMono",
             font_size=dp(12),
             size_hint_x=None,
-            width=dp(16),
+            width=pipe_width,
         )
         self.pipe_right = pipe_right
 
@@ -778,7 +956,7 @@ class DownloadityApp(App):
         top_border = Label(
             color=(1, 1, 1, 1),
             font_name="DejaVuSansMono",
-            font_size=12,
+            font_size=dp(12),
             size_hint=(1, None),
             height=dp(20),
             halign="center",
@@ -788,7 +966,7 @@ class DownloadityApp(App):
         bottom_border = Label(
             color=(1, 1, 1, 1),
             font_name="DejaVuSansMono",
-            font_size=12,
+            font_size=dp(12),
             size_hint=(1, None),
             height=dp(20),
             halign="center",
@@ -852,6 +1030,14 @@ class DownloadityApp(App):
         )
         self.checking_event = None
 
+        self.blocked_label = mono_label(
+            "YouTube is blocking this network\ntry again later or use mobile data",
+            dp(12),
+            color=(1, 0.3, 0.3, 1),
+            size_hint_y=None,
+            height=dp(40),
+        )
+
         root.add_widget(self.buttons)
 
         # space
@@ -890,14 +1076,14 @@ class DownloadityApp(App):
 
         table = BoxLayout(
             orientation="vertical",
-            size_hint_x=0.8,
+            size_hint_x=0.9,
             pos_hint={"center_x": 0.5},
         )
 
         header = BoxLayout(size_hint_y=None, height=lh * 5)
-        header.add_widget(mono_label("♪ AUDIO", dp(28)))
+        header.add_widget(mono_label("♪ AUDIO", dp(24)))
         header.add_widget(vertical_line())
-        header.add_widget(mono_label("▶ VIDEO", dp(28)))
+        header.add_widget(mono_label("▶ VIDEO", dp(24)))
         table.add_widget(header)
 
         dash_width = char_width("─", LINE_FONT)

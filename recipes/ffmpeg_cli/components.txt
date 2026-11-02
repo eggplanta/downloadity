@@ -1,0 +1,30 @@
+# Only what downloadity needs
+# Shared by the Android recipe and local test builds
+
+# Audio sources, converted to mp3
+decoder: aac aac_latm mp3 mp3float opus vorbis flac alac ac3 eac3
+decoder: pcm_s16le pcm_s16be pcm_s24le pcm_f32le pcm_u8
+
+# Video sources, decoded for cuts
+decoder: h264 hevc vp8 vp9 libdav1d mpeg4
+
+# mp3 output, cut output
+encoder: libmp3lame libx264 aac
+
+demuxer: mov matroska mp3 aac ogg flac wav mpegts flv hls concat
+demuxer: ac3 eac3 h264 hevc m4v loas
+
+muxer: mp4 mov ipod mp3 matroska webm adts ogg null
+
+parser: aac aac_latm ac3 flac h264 hevc mpegaudio opus vorbis
+parser: vp8 vp9 av1 mpeg4video
+
+# Stream copy fixups used by yt-dlp
+bsf: aac_adtstoasc h264_mp4toannexb hevc_mp4toannexb extract_extradata
+bsf: vp9_superframe vp9_superframe_split av1_frame_split setts null
+
+protocol: file pipe concat
+
+# Auto inserted on re-encode and rotation
+filter: aresample aformat anull null format scale crop
+filter: transpose hflip vflip trim atrim setpts asetpts copy acopy

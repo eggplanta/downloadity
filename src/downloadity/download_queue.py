@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Optional
 
+from .covers import embed_cover, thumbnail_url
 from .downloader import cut_video, download_audio, download_video
 from . import library
 from .extractor import VIDEO_LONG_SIDES
@@ -50,6 +51,7 @@ class DownloadQueue:
         self.listener = listener
         self.prepare_extra = prepare_extra
         self.convert_rate = CONVERT_RATE
+        self.last_path = None
         self.audio_only = any(host in media.source_url for host in AUDIO_ONLY_HOSTS)
 
         self.output_dir = root_dir
@@ -246,6 +248,10 @@ class DownloadQueue:
 
         if result["success"] and self.cut:
             result = self._cut(base, cut_progress.cut)
+        if result["success"]:
+            self.last_path = result.get("path")
+        if result["success"] and self.kind == "audio":
+            self._add_cover(entry, info, result.get("path"))
         if result["success"] and self.media.is_playlist:
             self._record(entry, result.get("path"))
 
@@ -255,6 +261,20 @@ class DownloadQueue:
         if not entry.embedded:
             entry.info = None
         return result
+
+    def _add_cover(self, entry: MediaEntry, info: dict, path: Optional[str]) -> None:
+        """
+        A missing cover never fails a download
+        """
+        track = entry.spotify_track
+        url = (track and track.cover_url) or thumbnail_url(info)
+        if not path or not url:
+            return
+
+        try:
+            embed_cover(path, url)
+        except Exception as e:
+            print("cover failed:", e)
 
     def _record(self, entry: MediaEntry, path: Optional[str]) -> None:
         """
@@ -280,7 +300,7 @@ class DownloadQueue:
         output = os.path.join(self.output_dir, f"{base} [{cut_label(start)}-{cut_label(end)}].mp4")
         success = cut_video(found[0], start, end, output, on_cut)
         os.remove(found[0])
-        return {"success": success}
+        return {"success": success, "path": output}
 
     def _progress_hook(self, expected: Optional[int], report):
         downloaded = {}
