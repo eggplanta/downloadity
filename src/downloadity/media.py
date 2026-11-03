@@ -4,6 +4,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
+import yt_dlp
+from spotify_scraper.errors import NotFoundError
+
 from . import extractor, spotify
 from .throttle import CHECK_ATTEMPTS, MAX_ATTEMPTS
 from .formats import (
@@ -21,6 +24,30 @@ SAMPLE_STEP = 10
 WORKERS = 3
 
 UNAVAILABLE_TITLES = ("[Deleted video]", "[Private video]")
+DETAIL_CHARS = 90
+
+# yt-dlp message -> short reason
+REASONS = (
+    ("is not a valid URL", "this is not a link"),
+    ("Unsupported URL", "this site is not supported"),
+    ("Private video", "this video is private"),
+    ("playlist does not exist", "playlist is private or doesn't exist"),
+    ("playlist is private", "playlist is private or doesn't exist"),
+    ("confirm your age", "age-restricted, needs a login"),
+    ("members-only", "members-only content"),
+    ("Join this channel", "members-only content"),
+    ("not available in your country", "not available in your country"),
+    ("not made this video available", "not available in your country"),
+    ("live event will begin", "this live hasn't started yet"),
+    ("Premieres in", "this premiere hasn't started yet"),
+    ("video is unavailable", "this video is unavailable"),
+    ("Video unavailable", "this video is unavailable"),
+    ("HTTP Error 404", "page not found"),
+    ("Failed to resolve", "no internet connection"),
+    ("getaddrinfo", "no internet connection"),
+    ("timed out", "connection timed out"),
+    ("no match found on YouTube", "no match found on YouTube"),
+)
 CAPTION_CHARS = 40
 
 
@@ -36,6 +63,13 @@ class MediaEntry:
     item_id: Optional[str] = None
     cover: Optional[bytes] = None
     audio_only: bool = False
+    error: Optional[str] = None
+
+
+class CheckError(Exception):
+    """
+    Short reason shown to the user
+    """
 
 
 @dataclass
@@ -52,15 +86,16 @@ class Media:
 
 # Main function
 
-def resolve_media(url: str) -> Optional[Media]:
+def resolve_media(url: str) -> Media:
     """
     Validates the link and extracts it once
     Playlists only extract an evenly spaced sample
+    Raises CheckError with a short reason
     """
     audio_only = any(host in url for host in AUDIO_ONLY_HOSTS)
 
     if "spotify.com" in url:
-        title, tracks = spotify.get_collection(url)
+        title, tracks = _spotify_collection(url)
         entries = [
             MediaEntry(
                 url=None,
@@ -78,7 +113,7 @@ def resolve_media(url: str) -> Optional[Media]:
         info = extractor.extract(url, flat="in_playlist", audio_only=audio_only, attempts=CHECK_ATTEMPTS)
 
         if info["type"] == "error":
-            return None
+            raise CheckError(describe_error(info["message"]))
 
         if info["type"] == "playlist":
             caption = caption_title(info)
@@ -105,7 +140,7 @@ def resolve_media(url: str) -> Optional[Media]:
             playlist_id = None
 
     if not entries:
-        return None
+        raise CheckError("this playlist is empty")
     for entry in entries:
         entry.audio_only = audio_only
 
@@ -113,7 +148,8 @@ def resolve_media(url: str) -> Optional[Media]:
 
     sampled = [build_quality_options(e.info) for e in samples if e.info]
     if not sampled:
-        return None
+        errors = [e.error for e in entries if e.error]
+        raise CheckError(describe_error(errors[0]) if errors else "no playable items found")
 
     if audio_only:
         for options in sampled:
@@ -166,7 +202,35 @@ def sample_indices(count: int) -> list[int]:
     return [int(i * count / size) for i in range(size)]
 
 
+def describe_error(message: str) -> str:
+    """
+    Short reason plus the raw detail
+    """
+    for marker, reason in REASONS:
+        if marker in message:
+            return reason
+    # "ERROR: [site] id: text" -> "text"
+    detail = re.sub(r"ERROR: (\[[^\]]+\] )?([^:\s]+: )?", "", message.strip())
+    return "couldn't read this link\n" + _shorten(detail)
+
+
 # Internal helpers
+
+def _spotify_collection(url: str):
+    try:
+        return spotify.get_collection(url)
+    except NotFoundError:
+        raise CheckError("spotify: private or unavailable")
+    except ValueError:
+        raise CheckError("spotify: only tracks, albums\nand playlists")
+    except Exception as e:
+        raise CheckError("spotify: couldn't read this link\n" + _shorten(str(e) or type(e).__name__))
+
+
+def _shorten(text: str) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= DETAIL_CHARS else text[:DETAIL_CHARS - 1] + "…"
+
 
 def _extract_samples(entries: list[MediaEntry]) -> list[MediaEntry]:
     """
@@ -228,13 +292,20 @@ def extract_entry(entry: MediaEntry, attempts: int = MAX_ATTEMPTS) -> None:
     """
     urls = [entry.url] if entry.url else []
     if not urls and entry.spotify_track:
-        urls = spotify.best_match_urls(entry.spotify_track, attempts)
+        try:
+            urls = spotify.best_match_urls(entry.spotify_track, attempts)
+        except yt_dlp.utils.DownloadError as e:
+            entry.error = "youtube search: " + str(e)
+            return
+        if not urls:
+            entry.error = "no match found on YouTube"
 
     for url in urls:
         info = extractor.extract(url, audio_only=entry.audio_only, attempts=attempts)
         if info["type"] == "video":
-            entry.url, entry.info = url, info
+            entry.url, entry.info, entry.error = url, info, None
             return
+        entry.error = info.get("message")
 
 
 def _total_duration(entries: list[MediaEntry], sampled: list[QualityOptions]) -> float:

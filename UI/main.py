@@ -21,7 +21,7 @@ from kivy.utils import escape_markup, platform
 
 from downloadity import downloader, library, updates
 from downloadity.download_queue import DownloadQueue
-from downloadity.media import resolve_media, subset
+from downloadity.media import CheckError, resolve_media, subset
 from downloadity.throttle import YoutubeBlockedError
 from ascii_art import RAMP, cover_markup
 
@@ -44,9 +44,11 @@ UPDATE_NAME = "downloadity-update.apk"
 
 LINE_FONT = dp(12)
 CHECKING_FRAMES = ("checking ..", "checking. .", "checking.. ", "checking...")
+BLOCKED_TEXT = "YouTube is blocking this network\ntry again later or use mobile data"
 
 ART_FONT = dp(7)
 ART_COLS = 72
+PLAYER_PADDING = dp(20)
 GRAY = (0.5, 0.5, 0.5, 1)
 CONTROLS = "⇄    ▮◀    ❚❚    ▶▮    ↻"
 VIDEO_CONTROLS = "▮◀   ❚❚   ▶▮"
@@ -425,7 +427,7 @@ class AsciiPopup(ModalView):
         self.closable = closable
         super().__init__(
             size_hint=(None, None),
-            size=(dp(320), height or (dp(420) if items else dp(230))),
+            size=(min(dp(320), Window.width - dp(24)), height or (dp(420) if items else dp(230))),
             auto_dismiss=False,
             background="",
             background_color=(0, 0, 0, 1),
@@ -535,21 +537,23 @@ class DownloadityApp(App):
         )
 
     def check_link(self, url):
-        blocked = False
+        media, error = None, None
         try:
             media = resolve_media(url)
         except YoutubeBlockedError:
-            media, blocked = None, True
+            error = BLOCKED_TEXT
+        except CheckError as e:
+            error = str(e)
         except Exception as e:
             import traceback; traceback.print_exc()
             updates.report(e)
-            media = None
+            error = f"unexpected error\n{type(e).__name__}: {str(e)[:80]}"
 
         Clock.schedule_once(
-            lambda dt: self.show_result(url, media, blocked)
+            lambda dt: self.show_result(url, media, error)
         )
 
-    def show_result(self, url, media, blocked=False):
+    def show_result(self, url, media, error=None):
         if url != self.link_input.text.strip():
             return
 
@@ -568,8 +572,13 @@ class DownloadityApp(App):
         # Keyboard would hide the button
         if valid:
             self.link_input.focus = False
-        if blocked:
-            self.show_in_result_area(self.blocked_label)
+        if error:
+            # Wraps long reasons to the screen
+            self.error_label.text_size = (Window.width - dp(60), None)
+            self.error_label.text = error
+            self.error_label.texture_update()
+            self.error_label.height = self.error_label.texture_size[1] + dp(8)
+            self.show_in_result_area(self.error_label)
         else:
             self.show_in_result_area(self.download_button if valid else None)
 
@@ -813,16 +822,21 @@ class DownloadityApp(App):
 
     def art_dims(self, info):
         if self.kind != "video":
-            return ART_COLS, self.art_rows
+            return self.art_cols, self.art_rows
 
         # Playlists keep a fixed 16:9 frame
         width, height = (info or {}).get("width"), (info or {}).get("height")
         aspect = VIDEO_ASPECT
         if width and height and not self.media.is_playlist:
             aspect = min(VIDEO_ASPECTS[1], max(VIDEO_ASPECTS[0], width / height))
-        area = ART_COLS * self.art_cw * self.art_rows * self.art_lh
+        area = self.art_cols * self.art_cw * self.art_rows * self.art_lh
         cols = round(math.sqrt(area * aspect) / self.art_cw)
         rows = round(math.sqrt(area / aspect) / self.art_lh)
+
+        # Wide frames shrink to the screen
+        if cols > self.max_cols:
+            rows = max(1, round(rows * self.max_cols / cols))
+            cols = self.max_cols
         return cols, rows
 
     # Queue listener (worker thread)
@@ -1027,16 +1041,18 @@ class DownloadityApp(App):
         # top space
         root.add_widget(Label(size_hint_y=None, height=dp(120)))
 
-        # logo
+        # logo, shrunk on narrow screens
+        logo_cols = max(len(line) for line in LOGO.splitlines())
+        logo_font = min(dp(12), dp(12) * (Window.width - dp(40)) / (logo_cols * char_width("▐", dp(12))))
         logo = Label(
             text=LOGO,
             color=(1, 1, 1, 1),
             font_name="DejaVuSansMono",
-            font_size=dp(12),
+            font_size=logo_font,
             halign="center",
             valign="top",
             size_hint_y=None,
-            height=dp(110),
+            height=dp(110) * logo_font / dp(12),
         )
         logo.text_size = (Window.width - dp(40), None)
         root.add_widget(logo)
@@ -1189,13 +1205,13 @@ class DownloadityApp(App):
         )
         self.checking_event = None
 
-        self.blocked_label = mono_label(
-            "YouTube is blocking this network\ntry again later or use mobile data",
+        self.error_label = mono_label(
+            "",
             dp(12),
             color=(1, 0.3, 0.3, 1),
             size_hint_y=None,
-            height=dp(40),
         )
+
 
         root.add_widget(self.buttons)
 
@@ -1281,11 +1297,14 @@ class DownloadityApp(App):
         self.art_font = uniform_font(ART_FONT)
         self.art_cw = char_width("@", self.art_font)
         self.art_lh = line_height(self.art_font)
-        self.art_rows = max(1, round(ART_COLS * self.art_cw / self.art_lh))
+        # Narrow screens get fewer columns
+        self.max_cols = int((Window.width - 2 * PLAYER_PADDING) / self.art_cw)
+        self.art_cols = min(ART_COLS, self.max_cols)
+        self.art_rows = max(1, round(self.art_cols * self.art_cw / self.art_lh))
 
         self.downloading_root = BoxLayout(
             orientation="vertical",
-            padding=[dp(20), dp(12), dp(20), dp(12)],
+            padding=[PLAYER_PADDING, dp(12), PLAYER_PADDING, dp(12)],
         )
         self.downloading_root.add_widget(Label())
         self.player_column = Label()
@@ -1313,7 +1332,7 @@ class DownloadityApp(App):
         column = BoxLayout(
             orientation="vertical",
             size_hint=(None, None),
-            width=ART_COLS * self.art_cw,
+            width=self.art_cols * self.art_cw,
             pos_hint={"center_x": 0.5},
         )
         column.bind(minimum_height=column.setter("height"))

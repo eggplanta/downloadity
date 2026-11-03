@@ -351,17 +351,17 @@ def _score_candidate(
     return score
 
 
-def _search_query(item: tuple[str, str], attempts: int = MAX_ATTEMPTS) -> tuple[str, list[dict]]:
+def _search_query(item: tuple[str, str], attempts: int = MAX_ATTEMPTS) -> tuple[str, list[dict], Optional[Exception]]:
     """
-    Run one YouTube search and return its type together with the entries
+    Run one YouTube search and return its type, entries and error
     """
     query_type, query = item
 
     try:
-        return query_type, _search_candidates(query, attempts)
-    except yt_dlp.utils.DownloadError:
-        # One failed query should not discard the other searches for this track.
-        return query_type, []
+        return query_type, _search_candidates(query, attempts), None
+    except yt_dlp.utils.DownloadError as e:
+        # One failed query keeps the others
+        return query_type, [], e
 
 
 def _collect_candidates(track: _SpotifyTrack, attempts: int = MAX_ATTEMPTS) -> list[_Candidate]:
@@ -376,7 +376,10 @@ def _collect_candidates(track: _SpotifyTrack, attempts: int = MAX_ATTEMPTS) -> l
             track.search_queries,
         )
 
-        for query_type, entries in results:
+        errors = []
+        for query_type, entries, error in results:
+            if error:
+                errors.append(error)
             for position, entry in enumerate(entries):
                 video_id = entry.get("id")
 
@@ -416,6 +419,9 @@ def _collect_candidates(track: _SpotifyTrack, attempts: int = MAX_ATTEMPTS) -> l
                 if existing.duration is None and duration is not None:
                     existing.duration = duration
 
+    # Every search failed
+    if errors and len(errors) == len(track.search_queries):
+        raise errors[-1]
     return list(candidates.values())
 
 

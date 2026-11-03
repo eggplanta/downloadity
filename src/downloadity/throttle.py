@@ -12,6 +12,8 @@ _BLOCK_MARKERS = (
     "confirm you’re not a bot",
     "confirm you're not a bot",
     "HTTP Error 429",
+    "rate-limited by YouTube",
+    "content isn't available, try again later",
 )
 
 
