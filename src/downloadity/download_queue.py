@@ -99,6 +99,7 @@ class DownloadQueue:
                         prepared[index] = prepare_pool.submit(self._prepare, index)
 
                 batch = []
+                downloads = {}
                 while pending and len(batch) < PAIR:
                     index = pending.popleft()
                     entry = entries[index]
@@ -126,6 +127,11 @@ class DownloadQueue:
                     if not batch:
                         self.listener.on_item_start(item)
                         shown_at = time.monotonic()
+
+                    # Starts before its pair is ready
+                    report = _LateReport(None if batch else self.listener)
+                    future = download_pool.submit(self._download, entry, report)
+                    downloads[future] = (len(batch), index, failed_title(entry, video), report)
                     batch.append((index, entry, item))
 
                 if not batch:
@@ -134,12 +140,11 @@ class DownloadQueue:
                 items = [item for _, _, item in batch]
                 weights = self._weights([entry for _, entry, _ in batch])
                 display = _PairDisplay(self.listener, items, weights, shown_at)
-                futures = {
-                    download_pool.submit(self._download, entry, display.report(k)): (k, index, failed_title(entry, video))
-                    for k, (index, entry, _) in enumerate(batch)
-                }
-                for future in as_completed(futures):
-                    k, index, name = futures[future]
+                for k, _, _, report in downloads.values():
+                    report.attach(display.report(k))
+
+                for future in as_completed(downloads):
+                    k, index, name, _ = downloads[future]
                     result = future.result()
                     display.complete(k)
 
@@ -486,6 +491,32 @@ class _PairDisplay:
         self.current += 1
         self.shown_at = time.monotonic()
         self.listener.on_item_start(self.items[self.current])
+
+
+class _LateReport:
+    """
+    Progress sent before the batch display exists
+    The shown item feeds the bar directly
+    """
+
+    def __init__(self, listener=None):
+        self.listener = listener
+        self.target = None
+        self.last = 0.0
+        self.lock = threading.Lock()
+
+    def __call__(self, fraction: float) -> None:
+        with self.lock:
+            self.last = fraction
+            if self.target:
+                self.target(fraction)
+            elif self.listener:
+                self.listener.on_progress(min(1.0, fraction))
+
+    def attach(self, target) -> None:
+        with self.lock:
+            self.target = target
+            target(self.last)
 
 
 def audio_tags(entry: MediaEntry) -> dict:

@@ -31,9 +31,11 @@ Window.clearcolor = (0, 0, 0, 1)
 Window.softinput_mode = "below_target"
 
 # Bundled, Android has no DejaVu
+FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 LabelBase.register(
     "DejaVuSansMono",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "DejaVuSansMono.ttf"),
+    os.path.join(FONTS_DIR, "DejaVuSansMono.ttf"),
+    fn_bold=os.path.join(FONTS_DIR, "DejaVuSansMono-Bold.ttf"),
 )
 
 # Kivy logs third-party debug otherwise
@@ -44,11 +46,15 @@ APK_TYPE = "application/vnd.android.package-archive"
 UPDATE_NAME = "downloadity-update.apk"
 
 LINE_FONT = dp(12)
+POPUP_SIDE = dp(40)
 CHECKING_FRAMES = ("checking ..", "checking. .", "checking.. ", "checking...")
 BLOCKED_TEXT = "YouTube is blocking this network\ntry again later or use mobile data"
 
 ART_FONT = dp(7)
 ART_COLS = 72
+# User's phone sets the proportions
+REFERENCE_WIDTH = dp(427)
+ART_SHARE = 0.72
 PLAYER_PADDING = dp(20)
 GRAY = (0.5, 0.5, 0.5, 1)
 CONTROLS = "⇄    ▮◀    ❚❚    ▶▮    ↻"
@@ -245,6 +251,15 @@ def uniform_font(font_size):
     return font_size
 
 
+def art_font(max_width):
+    # Largest grid font that fits
+    for size in range(math.ceil(ART_FONT), 3, -1):
+        widths = {char_width(char, size) for char in RAMP}
+        if len(widths) == 1 and ART_COLS * widths.pop() <= max_width:
+            return size
+    return uniform_font(ART_FONT)
+
+
 def line_height(font_size):
     label = CoreLabel(
         text="Mg",
@@ -253,6 +268,14 @@ def line_height(font_size):
     )
     label.refresh()
     return label.texture.size[1]
+
+def bar_markup(fraction, cols):
+    played = int(fraction * (cols - 1))
+    rest = cols - 1 - played
+    return (
+        f"[color=#ffffff]{'━' * played}●[/color]"
+        f"[color=#555555]{'─' * rest}[/color]"
+    )
 
 def download_label(media):
     # Playlist name, else the song
@@ -451,32 +474,35 @@ class AsciiPopup(ModalView):
 
         content = BoxLayout(
             orientation="vertical",
-            padding=[dp(40), dp(28), dp(40), dp(18)],
+            padding=[POPUP_SIDE, dp(28), POPUP_SIDE, dp(18) if buttons else dp(28)],
             spacing=dp(8),
             pos_hint={"x": 0, "y": 0},
         )
 
-        text = mono_label(message, dp(15), markup=True)
-        text.bind(size=text.setter("text_size"))
-        self.message = text
-        if items:
-            text.size_hint_y = None
-            text.height = dp(40)
-        content.add_widget(text)
+        # Body alone when no message
+        if message is not None:
+            text = mono_label(message, dp(15), markup=True)
+            text.bind(size=text.setter("text_size"))
+            self.message = text
+            if items:
+                text.size_hint_y = None
+                text.height = dp(40)
+            content.add_widget(text)
 
         if items:
             content.add_widget(self.item_list(items))
         if body:
             content.add_widget(body)
 
-        row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(16))
         self.buttons = []
-        for label, callback in buttons:
-            button = AsciiButton(escape_markup(f"[ {label} ]"), border=False, font_size=dp(15))
-            button.bind(on_release=lambda _b, cb=callback: self.choose(cb))
-            row.add_widget(button)
-            self.buttons.append(button)
-        content.add_widget(row)
+        if buttons:
+            row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(16))
+            for label, callback in buttons:
+                button = AsciiButton(escape_markup(f"[ {label} ]"), border=False, font_size=dp(15))
+                button.bind(on_release=lambda _b, cb=callback: self.choose(cb))
+                row.add_widget(button)
+                self.buttons.append(button)
+            content.add_widget(row)
 
         layout.add_widget(content)
         self.add_widget(layout)
@@ -885,15 +911,10 @@ class DownloadityApp(App):
         self.player_column.width = width
         self.art_label.height = rows * self.art_lh
         self.art_label.text = markup or "[color=#333333]" + "\n".join(["·" * cols] * rows) + "[/color]"
-        self.bar_cols = int(width / char_width("━", LINE_FONT))
+        self.bar_cols = int(width / char_width("━", LINE_FONT * self.scale))
 
     def draw_bar(self, fraction):
-        played = int(fraction * (self.bar_cols - 1))
-        rest = self.bar_cols - 1 - played
-        self.bar_label.text = (
-            f"[color=#ffffff]{'━' * played}●[/color]"
-            f"[color=#555555]{'─' * rest}[/color]"
-        )
+        self.bar_label.text = bar_markup(fraction, self.bar_cols)
 
     def tick_timer(self, dt):
         elapsed = int((self.ended_at or time.monotonic()) - self.started_at)
@@ -964,28 +985,55 @@ class DownloadityApp(App):
             apk = None
 
         if apk:
-            Clock.schedule_once(lambda dt: self.update_app(apk))
+            Clock.schedule_once(lambda dt: self.offer_update(apk))
         else:
             updates.check_libs()
 
+    def offer_update(self, apk):
+        # Asked again on every launch
+        AsciiPopup(
+            f"new version v{apk['version']}\n\nupdate now?",
+            [("yes", lambda: self.update_app(apk)), ("no", self.skip_update)],
+            closable=False,
+        ).open()
+
+    def skip_update(self):
+        threading.Thread(target=updates.check_libs, daemon=True).start()
+
     def update_app(self, apk):
-        title = f"updating to\nv{apk['version']}"
-        popup = AsciiPopup(f"{title}\n\n0%", [], closable=False)
+        title = mono_label(f"downloading v{apk['version']}", dp(15), size_hint_y=None, height=dp(24))
+        bar = mono_label("", LINE_FONT, markup=True, size_hint_y=None, height=dp(20))
+        percent = mono_label("0%", dp(13), color=GRAY, size_hint_y=None, height=dp(20))
+        body = BoxLayout(orientation="vertical")
+        for widget in (Label(), title, Label(size_hint_y=None, height=dp(14)), bar, percent, Label()):
+            body.add_widget(widget)
+
+        popup = AsciiPopup(None, [], body=body, closable=False)
+        cols = int((popup.width - 2 * POPUP_SIDE) / char_width("━", LINE_FONT))
+        bar.text = bar_markup(0, cols)
         popup.open()
         shown = [0]
 
+        def show(fraction):
+            bar.text = bar_markup(fraction, cols)
+            percent.text = f"{int(fraction * 100)}%"
+
         def progress(fraction):
-            percent = int(fraction * 100)
-            if percent != shown[0]:
-                shown[0] = percent
-                Clock.schedule_once(lambda dt: setattr(popup.message, "text", f"{title}\n\n{percent}%"))
+            value = int(fraction * 100)
+            if value != shown[0]:
+                shown[0] = value
+                Clock.schedule_once(lambda dt: show(fraction))
+
+        def failed():
+            popup.dismiss()
+            AsciiPopup("update failed\n\ntry again later", [("OK", self.skip_update)], closable=False).open()
 
         def work():
             try:
                 uri = save_update(apk["url"], progress)
             except Exception as e:
                 print("update: apk download failed:", e)
-                Clock.schedule_once(lambda dt: popup.dismiss())
+                Clock.schedule_once(lambda dt: failed())
                 return
             Clock.schedule_once(lambda dt: (popup.dismiss(), install_apk(uri)))
 
@@ -1303,7 +1351,9 @@ class DownloadityApp(App):
     #===================DOWNLOADING====================#
 
     def build_downloading(self):
-        self.art_font = uniform_font(ART_FONT)
+        # Narrow screens shrink everything alike
+        self.scale = min(1, Window.width / REFERENCE_WIDTH)
+        self.art_font = art_font(Window.width * ART_SHARE + 1)
         self.art_cw = char_width("@", self.art_font)
         self.art_lh = line_height(self.art_font)
         # Narrow screens get fewer columns
@@ -1313,7 +1363,7 @@ class DownloadityApp(App):
 
         self.downloading_root = BoxLayout(
             orientation="vertical",
-            padding=[PLAYER_PADDING, dp(12), PLAYER_PADDING, dp(12)],
+            padding=[PLAYER_PADDING, dp(12), PLAYER_PADDING, dp(2)],
         )
         self.downloading_root.add_widget(Label())
         self.player_column = Label()
@@ -1322,7 +1372,7 @@ class DownloadityApp(App):
 
         self.timer_label = mono_label(
             "00:00",
-            dp(11),
+            dp(10),
             color=GRAY,
             size_hint_y=None,
             height=dp(16),
@@ -1350,17 +1400,22 @@ class DownloadityApp(App):
             "",
             self.art_font,
             markup=True,
+            # Bold glyphs look less faded
+            bold=True,
             size_hint_y=None,
             height=self.art_rows * self.art_lh,
         )
         self.bar_label = mono_label(
             "",
-            LINE_FONT,
+            LINE_FONT * self.scale,
             markup=True,
             size_hint_y=None,
-            height=dp(20),
+            height=self.sdp(20),
         )
         return column
+
+    def sdp(self, value):
+        return dp(value) * self.scale
 
     def name_labels(self, title_font, artist_font):
         self.song_label = mono_label(
@@ -1370,7 +1425,7 @@ class DownloadityApp(App):
             shorten=True,
             shorten_from="right",
             size_hint_y=None,
-            height=title_font + dp(7),
+            height=title_font + self.sdp(7),
         )
         self.artist_label = mono_label(
             "",
@@ -1380,7 +1435,7 @@ class DownloadityApp(App):
             shorten_from="right",
             color=GRAY,
             size_hint_y=None,
-            height=artist_font + dp(7),
+            height=artist_font + self.sdp(7),
         )
         for label in (self.song_label, self.artist_label):
             label.bind(size=label.setter("text_size"))
@@ -1389,41 +1444,41 @@ class DownloadityApp(App):
     def build_music_column(self):
         column = self.player_parts()
         column.add_widget(self.art_label)
-        column.add_widget(Label(size_hint_y=None, height=dp(28)))
+        column.add_widget(Label(size_hint_y=None, height=self.sdp(28)))
 
-        for label in self.name_labels(dp(17), dp(13)):
+        for label in self.name_labels(self.sdp(17), self.sdp(13)):
             column.add_widget(label)
-        column.add_widget(Label(size_hint_y=None, height=dp(18)))
+        column.add_widget(Label(size_hint_y=None, height=self.sdp(18)))
 
         column.add_widget(self.bar_label)
-        column.add_widget(Label(size_hint_y=None, height=dp(14)))
+        column.add_widget(Label(size_hint_y=None, height=self.sdp(14)))
 
-        column.add_widget(mono_label(CONTROLS, dp(20), size_hint_y=None, height=dp(32)))
-        column.add_widget(Label(size_hint_y=None, height=dp(22)))
+        column.add_widget(mono_label(CONTROLS, self.sdp(20), size_hint_y=None, height=self.sdp(32)))
+        column.add_widget(Label(size_hint_y=None, height=self.sdp(22)))
 
-        self.counter_label = mono_label("", dp(14), size_hint_y=None, height=dp(20))
+        self.counter_label = mono_label("", self.sdp(14), size_hint_y=None, height=self.sdp(20))
         column.add_widget(self.counter_label)
         return column
 
     def build_video_column(self):
         column = self.player_parts()
         column.add_widget(self.art_label)
-        column.add_widget(Label(size_hint_y=None, height=dp(8)))
+        column.add_widget(Label(size_hint_y=None, height=self.sdp(8)))
         column.add_widget(self.bar_label)
 
         # Controls left, counter right
-        controls = BoxLayout(size_hint_y=None, height=dp(30))
-        buttons = mono_label(VIDEO_CONTROLS, dp(16), size_hint_x=None)
+        controls = BoxLayout(size_hint_y=None, height=self.sdp(30))
+        buttons = mono_label(VIDEO_CONTROLS, self.sdp(16), size_hint_x=None)
         buttons.bind(texture_size=lambda label, size: setattr(label, "width", size[0]))
         controls.add_widget(buttons)
 
-        self.counter_label = mono_label("", dp(13), halign="right")
+        self.counter_label = mono_label("", self.sdp(13), halign="right")
         self.counter_label.bind(size=self.counter_label.setter("text_size"))
         controls.add_widget(self.counter_label)
         column.add_widget(controls)
-        column.add_widget(Label(size_hint_y=None, height=dp(18)))
+        column.add_widget(Label(size_hint_y=None, height=self.sdp(18)))
 
-        for label in self.name_labels(dp(15), dp(12)):
+        for label in self.name_labels(self.sdp(15), self.sdp(12)):
             column.add_widget(label)
         return column
 
