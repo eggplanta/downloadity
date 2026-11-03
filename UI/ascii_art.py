@@ -2,6 +2,7 @@ import os
 import ssl
 import tempfile
 import urllib.request
+from typing import Optional
 
 import certifi
 
@@ -9,22 +10,26 @@ from kivy.core.image import ImageLoader
 
 RAMP = ".:-=+*#%@"
 COLOR_STEP = 24
+# Lifts darks most, keeps the order
+BRIGHTEN = [round(255 * (value / 255) ** 0.6) for value in range(256)]
 MIN_CROP = 180
 
 
-def cover_markup(info: dict, cols: int, rows: int, aspect: float = 1) -> str:
+def cover_markup(info: dict, cols: int, rows: int, aspect: float = 1, data: Optional[bytes] = None) -> str:
     """
     Colored ASCII of the item's cover, as Kivy markup
     Aspect is the cover's width / height
+    Given data skips the download
     """
-    url = _cover_url(info, aspect)
-    if not url:
-        return ""
+    if data is None:
+        url = _cover_url(info, aspect)
+        if not url:
+            return ""
 
-    # Android Python lacks system certificates
-    context = ssl.create_default_context(cafile=certifi.where())
-    with urllib.request.urlopen(url, timeout=10, context=context) as response:
-        data = response.read()
+        # Android Python lacks system certificates
+        context = ssl.create_default_context(cafile=certifi.where())
+        with urllib.request.urlopen(url, timeout=10, context=context) as response:
+            data = response.read()
 
     fd, path = tempfile.mkstemp(suffix=".jpg")
     try:
@@ -76,6 +81,7 @@ def _to_markup(image, cols: int, rows: int, aspect: float) -> str:
             r, g, b = _cell_color(pixels, stride, bpp, left, top, crop_w, crop_h, cols, rows, col, row)
             if bgr:
                 r, b = b, r
+            r, g, b = BRIGHTEN[r], BRIGHTEN[g], BRIGHTEN[b]
 
             lum = 0.299 * r + 0.587 * g + 0.114 * b
             char = RAMP[min(len(RAMP) - 1, int(lum / 256 * len(RAMP)))]

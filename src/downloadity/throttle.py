@@ -5,6 +5,8 @@ import yt_dlp
 
 BASE_INTERVAL = 0.5
 MAX_ATTEMPTS = 6
+# Checking reports blocks fast
+CHECK_ATTEMPTS = 2
 
 _BLOCK_MARKERS = (
     "confirm you’re not a bot",
@@ -28,8 +30,8 @@ class _Throttle:
         self._interval = BASE_INTERVAL
         self._next_slot = 0.0
 
-    def run(self, request):
-        for attempt in range(1, MAX_ATTEMPTS + 1):
+    def run(self, request, attempts: int = MAX_ATTEMPTS):
+        for attempt in range(1, attempts + 1):
             self._wait()
 
             try:
@@ -38,7 +40,7 @@ class _Throttle:
                 if not is_block(e):
                     raise
 
-                if attempt < MAX_ATTEMPTS:
+                if attempt < attempts:
                     self._back_off(BASE_INTERVAL * 2 ** attempt)
                 continue
 
@@ -46,7 +48,7 @@ class _Throttle:
             return result
 
         self._reset()
-        raise YoutubeBlockedError(f"YouTube kept blocking after {MAX_ATTEMPTS} attempts")
+        raise YoutubeBlockedError(f"YouTube kept blocking after {attempts} attempts")
 
     def _wait(self):
         with self._lock:

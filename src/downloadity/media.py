@@ -1,10 +1,11 @@
 import dataclasses
 import re
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
 from . import extractor, spotify
+from .throttle import CHECK_ATTEMPTS, MAX_ATTEMPTS
 from .formats import (
     PlaylistOptions,
     QualityOptions,
@@ -14,9 +15,9 @@ from .formats import (
 
 AUDIO_ONLY_HOSTS = ("spotify.com", "music.youtube.com")
 
-SAMPLE_RATIO = 0.2
-SAMPLE_MIN = 6
-SAMPLE_MAX = 12
+SAMPLE_MIN = 4
+SAMPLE_MAX = 8
+SAMPLE_STEP = 10
 WORKERS = 3
 
 UNAVAILABLE_TITLES = ("[Deleted video]", "[Private video]")
@@ -33,6 +34,8 @@ class MediaEntry:
     invalid: bool = False
     embedded: bool = False
     item_id: Optional[str] = None
+    cover: Optional[bytes] = None
+    audio_only: bool = False
 
 
 @dataclass
@@ -54,6 +57,8 @@ def resolve_media(url: str) -> Optional[Media]:
     Validates the link and extracts it once
     Playlists only extract an evenly spaced sample
     """
+    audio_only = any(host in url for host in AUDIO_ONLY_HOSTS)
+
     if "spotify.com" in url:
         title, tracks = spotify.get_collection(url)
         entries = [
@@ -70,7 +75,7 @@ def resolve_media(url: str) -> Optional[Media]:
         match = re.search(r"/(playlist|album)/([A-Za-z0-9]+)", url)
         playlist_id = match and f"spotify:{match.group(1)}:{match.group(2)}"
     else:
-        info = extractor.extract(url, flat="in_playlist")
+        info = extractor.extract(url, flat="in_playlist", audio_only=audio_only, attempts=CHECK_ATTEMPTS)
 
         if info["type"] == "error":
             return None
@@ -101,6 +106,8 @@ def resolve_media(url: str) -> Optional[Media]:
 
     if not entries:
         return None
+    for entry in entries:
+        entry.audio_only = audio_only
 
     samples = _extract_samples(entries)
 
@@ -108,7 +115,7 @@ def resolve_media(url: str) -> Optional[Media]:
     if not sampled:
         return None
 
-    if any(host in url for host in AUDIO_ONLY_HOSTS):
+    if audio_only:
         for options in sampled:
             options.video = []
 
@@ -152,9 +159,10 @@ def caption_title(info: dict) -> Optional[str]:
 
 def sample_indices(count: int) -> list[int]:
     """
-    20% of the items (6 to 12), evenly spaced
+    One more per 10 items (4 to 8), evenly spaced
     """
-    size = min(count, max(SAMPLE_MIN, min(SAMPLE_MAX, round(count * SAMPLE_RATIO))))
+    extra = max(0, count - 1) // SAMPLE_STEP
+    size = min(count, SAMPLE_MAX, SAMPLE_MIN + extra)
     return [int(i * count / size) for i in range(size)]
 
 
@@ -169,10 +177,13 @@ def _extract_samples(entries: list[MediaEntry]) -> list[MediaEntry]:
     used = set(picks)
     samples = []
 
-    with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+    executor = ThreadPoolExecutor(max_workers=WORKERS)
+    try:
         while picks:
             pending = [entries[i] for i in picks if entries[i].info is None]
-            list(executor.map(extract_entry, pending))
+            futures = [executor.submit(extract_entry, e, CHECK_ATTEMPTS) for e in pending]
+            for future in as_completed(futures):
+                future.result()
 
             retry = []
             for index in picks:
@@ -187,6 +198,9 @@ def _extract_samples(entries: list[MediaEntry]) -> list[MediaEntry]:
                     used.add(replacement)
                     retry.append(replacement)
             picks = retry
+    finally:
+        # First block skips the other samples
+        executor.shutdown(wait=False, cancel_futures=True)
 
     return samples
 
@@ -208,16 +222,16 @@ def _is_unavailable(entry: dict) -> bool:
     return entry.get("title") in UNAVAILABLE_TITLES or entry.get("availability") == "private"
 
 
-def extract_entry(entry: MediaEntry) -> None:
+def extract_entry(entry: MediaEntry, attempts: int = MAX_ATTEMPTS) -> None:
     """
     Spotify falls back to the next match
     """
     urls = [entry.url] if entry.url else []
     if not urls and entry.spotify_track:
-        urls = spotify.best_match_urls(entry.spotify_track)
+        urls = spotify.best_match_urls(entry.spotify_track, attempts)
 
     for url in urls:
-        info = extractor.extract(url)
+        info = extractor.extract(url, audio_only=entry.audio_only, attempts=attempts)
         if info["type"] == "video":
             entry.url, entry.info = url, info
             return

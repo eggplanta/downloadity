@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Optional
 
-from .covers import embed_cover, thumbnail_url
+from .covers import cover_image, embed_cover
 from .downloader import cut_video, download_audio, download_video
 from . import library
 from .extractor import VIDEO_LONG_SIDES
@@ -17,7 +17,7 @@ from .media import AUDIO_ONLY_HOSTS, Media, MediaEntry, caption_title, extract_e
 from .throttle import YoutubeBlockedError, is_block
 
 PAIR = 2
-MIN_SHOW = 2.0
+MIN_SHOW = 1.5
 DOWNLOAD_SHARE = 0.2
 ASSUMED_SPEED = 5 * 2**20
 CUT_COST = 0.005
@@ -42,13 +42,14 @@ class DownloadQueue:
     Blocked items go to the end of the queue once
     """
 
-    def __init__(self, media: Media, kind: str, value: int, root_dir: str, listener, prepare_extra=None, cut=None, overwrite=False):
+    def __init__(self, media: Media, kind: str, value, root_dir: str, listener, prepare_extra=None, cut=None, overwrite=False, on_saved=None):
         self.media = media
         self.cut = cut
         self.overwrite = overwrite
         self.kind = kind
         self.value = value
         self.listener = listener
+        self.on_saved = on_saved
         self.prepare_extra = prepare_extra
         self.convert_rate = CONVERT_RATE
         self.last_path = None
@@ -159,6 +160,9 @@ class DownloadQueue:
         if entry.info is None:
             extract_entry(entry)
 
+        if entry.info is not None and self.kind == "audio" and entry.cover is None:
+            self._fetch_cover(entry)
+
         if entry.info is None or self.prepare_extra is None:
             return None
 
@@ -201,16 +205,15 @@ class DownloadQueue:
         report = _monotonic(report)
         options = {"overwrite": self.overwrite}
 
-        # Audio bar includes the mp3 conversion
-        if self.kind == "audio":
-            download = download_audio
+        download = download_audio if self.kind == "audio" else download_video
+        conversion = None
+        on_download = report
+
+        # Only foreign codecs get converted
+        if self.kind == "audio" and not quality.native:
             conversion = _ConversionProgress(self, report, entry.info.get("duration"))
             options["on_postprocess"] = conversion.hook
             on_download = lambda fraction: report(DOWNLOAD_SHARE * fraction)
-        else:
-            download = download_video
-            conversion = None
-            on_download = report
 
         info = entry.info["ytdlp_info"]
         caption = caption_title(info)
@@ -252,6 +255,8 @@ class DownloadQueue:
             self.last_path = result.get("path")
         if result["success"] and self.kind == "audio":
             self._add_cover(entry, info, result.get("path"))
+        if result["success"] and self.on_saved and result.get("path"):
+            self.on_saved(result["path"])
         if result["success"] and self.media.is_playlist:
             self._record(entry, result.get("path"))
 
@@ -262,17 +267,26 @@ class DownloadQueue:
             entry.info = None
         return result
 
+    def _fetch_cover(self, entry: MediaEntry) -> None:
+        """
+        One image for art and file
+        """
+        track = entry.spotify_track
+        try:
+            entry.cover = cover_image(entry.info["ytdlp_info"], track and track.cover_url)
+        except Exception as e:
+            print("cover failed:", e)
+
     def _add_cover(self, entry: MediaEntry, info: dict, path: Optional[str]) -> None:
         """
         A missing cover never fails a download
         """
-        track = entry.spotify_track
-        url = (track and track.cover_url) or thumbnail_url(info)
-        if not path or not url:
+        data, entry.cover = entry.cover, None
+        if not path or not data:
             return
 
         try:
-            embed_cover(path, url)
+            embed_cover(path, data)
         except Exception as e:
             print("cover failed:", e)
 
@@ -437,12 +451,11 @@ class _PairDisplay:
         Shows the rest, each for MIN_SHOW
         """
         while True:
-            time.sleep(max(0.0, self.shown_at + MIN_SHOW - time.monotonic()))
             with self.lock:
-                if self.current == len(self.items) - 1:
+                self._update()
+                if self.current == len(self.items) - 1 and self._shown_time() >= MIN_SHOW:
                     return
-                self._show_next()
-                self.listener.on_progress(1.0)
+            time.sleep(TICK)
 
     def _update(self) -> None:
         progress = sum(f * s for f, s in zip(self.fractions, self.shares))
@@ -452,14 +465,19 @@ class _PairDisplay:
         while (
             self.current < last
             and progress >= self.ends[self.current]
-            and time.monotonic() - self.shown_at >= MIN_SHOW
+            and self._shown_time() >= MIN_SHOW
         ):
             self.listener.on_progress(1.0)
             self._show_next()
 
         start = self.ends[self.current] - self.shares[self.current]
         fraction = (progress - start) / self.shares[self.current]
+        # Finished items still fill gradually
+        fraction = min(fraction, self._shown_time() / MIN_SHOW)
         self.listener.on_progress(min(1.0, max(0.0, fraction)))
+
+    def _shown_time(self) -> float:
+        return time.monotonic() - self.shown_at
 
     def _show_next(self) -> None:
         self.current += 1

@@ -29,11 +29,10 @@ class FFmpegCliRecipe(Recipe):
     """
     version = "9.0.2"
     url = "https://ffmpeg.org/releases/ffmpeg-{version}.tar.xz"
-    depends = ["mp3lame", "x264", "dav1d"]
+    depends = ["x264", "dav1d"]
     built_libraries = {"libffmpeg.so": "."}
 
     def build_arch(self, arch):
-        lame = self.get_recipe("mp3lame", self.ctx).get_build_dir(arch.arch)
         x264 = self.get_recipe("x264", self.ctx).get_build_dir(arch.arch)
         dav1d = self.get_recipe("dav1d", self.ctx)
 
@@ -44,9 +43,9 @@ class FFmpegCliRecipe(Recipe):
                 dav1d.pkgconfig_dir(arch),
             ])
 
-            cflags = f"{env['CFLAGS']} -I{lame}/include -I{x264}/include"
+            cflags = f"{env['CFLAGS']} -I{x264}/include"
             # p4a LDFLAGS lack the target
-            ldflags = f"-target {arch.target} {env['LDFLAGS']} -L{lame}/lib -L{x264}/lib"
+            ldflags = f"-target {arch.target} {env['LDFLAGS']} -L{x264}/lib"
 
             flags = [
                 "--target-os=android",
@@ -80,7 +79,6 @@ class FFmpegCliRecipe(Recipe):
 
                 # External codecs
                 "--enable-gpl",
-                "--enable-libmp3lame",
                 "--enable-libx264",
                 "--enable-libdav1d",
                 "--enable-zlib",

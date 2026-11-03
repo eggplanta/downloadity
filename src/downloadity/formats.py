@@ -11,6 +11,7 @@ class AudioQuality:
     bitrate: int
     filesize: Optional[int]
     codec: str = "m4a"
+    native: bool = True
 
     @property
     def value(self) -> str:
@@ -39,7 +40,7 @@ class VideoQuality:
 
     @property
     def label(self) -> str:
-        return f"{self.height}p"
+        return f"MP4 {self.height}p"
 
     @property
     def download_format_id(self) -> str:
@@ -81,7 +82,7 @@ class PlaylistQuality:
     def label(self) -> str:
         if self.kind == "audio":
             return f"{self.value.upper()} {self.bitrate} kbps"
-        return f"{self.value}p"
+        return f"MP4 {self.value}p"
 
     @property
     def filesize_label(self) -> Optional[str]:
@@ -209,6 +210,7 @@ def _build_audio_qualities(raw_audio: list) -> list[AudioQuality]:
             bitrate=item["bitrate"],
             filesize=item.get("filesize"),
             codec=item.get("codec", "m4a"),
+            native=item.get("native", True),
         )
         for item in raw_audio
         if item.get("format_id") is not None

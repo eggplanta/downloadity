@@ -14,7 +14,7 @@ from spotify_scraper import SpotifyClient
 from spotify_scraper.http.retry import RetryPolicy
 from spotify_scraper.models import Track as SpotifyTrackData
 
-from .throttle import throttle
+from .throttle import MAX_ATTEMPTS, throttle
 
 
 NO_TRACK_LIMIT = None
@@ -108,14 +108,14 @@ def _safe_convert(raw_tracks) -> list[_SpotifyTrack]:
     return tracks
 
 
-def _search_candidates(query: str) -> list[dict]:
+def _search_candidates(query: str, attempts: int = MAX_ATTEMPTS) -> list[dict]:
     search = f"ytsearch{_CANDIDATES_PER_QUERY}:{query}"
 
     def request():
         with yt_dlp.YoutubeDL(_YDL_SEARCH_OPTS) as ydl:
             return ydl.extract_info(search, download=False)
 
-    result = throttle.run(request)
+    result = throttle.run(request, attempts)
     return result.get("entries") or []
 
 
@@ -257,9 +257,9 @@ def _has_alternate_version_marker(title: str) -> bool:
             r"slowed|"
             r"8d|"
             r"reaction|"
-            r"mashup"
-            r"sub(?:title)?s?"
-            r"acoustic|"
+            r"mashup|"
+            r"sub(?:title)?s?|"
+            r"acoustic"
             r")\b",
             lowered,
         )
@@ -351,20 +351,20 @@ def _score_candidate(
     return score
 
 
-def _search_query(item: tuple[str, str]) -> tuple[str, list[dict]]:
+def _search_query(item: tuple[str, str], attempts: int = MAX_ATTEMPTS) -> tuple[str, list[dict]]:
     """
     Run one YouTube search and return its type together with the entries
     """
     query_type, query = item
 
     try:
-        return query_type, _search_candidates(query)
+        return query_type, _search_candidates(query, attempts)
     except yt_dlp.utils.DownloadError:
         # One failed query should not discard the other searches for this track.
         return query_type, []
 
 
-def _collect_candidates(track: _SpotifyTrack) -> list[_Candidate]:
+def _collect_candidates(track: _SpotifyTrack, attempts: int = MAX_ATTEMPTS) -> list[_Candidate]:
     """
     Run the n searches in parallel and merge duplicate YouTube videos
     """
@@ -372,7 +372,7 @@ def _collect_candidates(track: _SpotifyTrack) -> list[_Candidate]:
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = executor.map(
-            _search_query,
+            lambda item: _search_query(item, attempts),
             track.search_queries,
         )
 
@@ -421,11 +421,12 @@ def _collect_candidates(track: _SpotifyTrack) -> list[_Candidate]:
 
 def _rank_candidates(
     track: _SpotifyTrack,
+    attempts: int = MAX_ATTEMPTS,
 ) -> list[tuple[float, _Candidate]]:
     """
     Return all candidates sorted from highest to lowest score
     """
-    candidates = _collect_candidates(track)
+    candidates = _collect_candidates(track, attempts)
 
     scored = [
         (
@@ -464,8 +465,8 @@ def get_collection(url: str) -> tuple[Optional[str], list[_SpotifyTrack]]:
     raise ValueError(f"Unsupported Spotify URL: {url}")
 
 
-def best_match_urls(track: _SpotifyTrack) -> list[str]:
+def best_match_urls(track: _SpotifyTrack, attempts: int = MAX_ATTEMPTS) -> list[str]:
     """
     Best YouTube candidates, best first
     """
-    return [candidate.url for _, candidate in _rank_candidates(track)[:MATCH_CANDIDATES]]
+    return [candidate.url for _, candidate in _rank_candidates(track, attempts)[:MATCH_CANDIDATES]]

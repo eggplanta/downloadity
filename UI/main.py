@@ -19,11 +19,11 @@ from kivy.uix.modalview import ModalView
 from kivy.uix.floatlayout import FloatLayout
 from kivy.utils import escape_markup, platform
 
-from downloadity import downloader, library
+from downloadity import downloader, library, updates
 from downloadity.download_queue import DownloadQueue
 from downloadity.media import resolve_media, subset
 from downloadity.throttle import YoutubeBlockedError
-from ascii_art import cover_markup
+from ascii_art import RAMP, cover_markup
 
 Window.clearcolor = (0, 0, 0, 1)
 # Focused field stays above keyboard
@@ -38,18 +38,23 @@ LabelBase.register(
 # Kivy logs third-party debug otherwise
 logging.getLogger().setLevel(logging.WARNING)
 
-version = "v 1.0.0"
+APP_VERSION = "1.0.0"
+APK_TYPE = "application/vnd.android.package-archive"
+UPDATE_NAME = "downloadity-update.apk"
 
 LINE_FONT = dp(12)
 CHECKING_FRAMES = ("checking ..", "checking. .", "checking.. ", "checking...")
 
-ART_FONT = dp(8)
-ART_COLS = 60
+ART_FONT = dp(7)
+ART_COLS = 72
 GRAY = (0.5, 0.5, 0.5, 1)
 CONTROLS = "⇄    ▮◀    ❚❚    ▶▮    ↻"
 VIDEO_CONTROLS = "▮◀   ❚❚   ▶▮"
 VIDEO_ASPECT = 16 / 9
 VIDEO_ASPECTS = (0.5, 2.4)
+BACK_KEY = 27
+SERVICE_ID = 1
+PROGRESS_CHANNEL = "downloads"
 
 if platform == "android":
     from jnius import autoclass, cast
@@ -64,6 +69,49 @@ if platform == "android":
     downloader.TEMP_DIR = os.path.join(activity.getCacheDir().getAbsolutePath(), "work")
 
     from android.runnable import run_on_ui_thread
+
+    APP_VERSION = activity.getPackageManager().getPackageInfo(activity.getPackageName(), 0).versionName
+    SDK = autoclass("android.os.Build$VERSION").SDK_INT
+
+    def save_update(url, on_progress):
+        """
+        Public downloads, the installer reads it
+        """
+        ContentValues = autoclass("android.content.ContentValues")
+        Integer = autoclass("java.lang.Integer")
+        downloads = autoclass("android.provider.MediaStore$Downloads").EXTERNAL_CONTENT_URI
+        resolver = activity.getContentResolver()
+
+        values = ContentValues()
+        values.put("_display_name", UPDATE_NAME)
+        values.put("mime_type", APK_TYPE)
+        values.put("is_pending", Integer(1))
+        uri = resolver.insert(downloads, values)
+        try:
+            descriptor = resolver.openFileDescriptor(uri, "w")
+            with os.fdopen(descriptor.detachFd(), "wb") as f:
+                updates.download(url, f, on_progress)
+        except Exception:
+            resolver.delete(uri, None, None)
+            raise
+
+        values = ContentValues()
+        values.put("is_pending", Integer(0))
+        resolver.update(uri, values, None, None)
+        return uri
+
+    def remove_update():
+        # Installed or declined, either way
+        downloads = autoclass("android.provider.MediaStore$Downloads").EXTERNAL_CONTENT_URI
+        activity.getContentResolver().delete(downloads, "_display_name LIKE ?", ["downloadity-update%"])
+
+    def install_apk(uri):
+        Intent = autoclass("android.content.Intent")
+        # Only installers handle it, no chooser
+        intent = Intent(Intent.ACTION_INSTALL_PACKAGE)
+        intent.setDataAndType(uri, APK_TYPE)
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK)
+        activity.startActivity(intent)
 
     @run_on_ui_thread
     def clear_system_bars():
@@ -98,6 +146,36 @@ if platform == "android":
         from android.permissions import Permission, request_permissions
         request_permissions([Permission.POST_NOTIFICATIONS])
 
+    def show_progress(position, total):
+        # Same id replaces the service notification
+        Context = autoclass("android.content.Context")
+        Notification = autoclass("android.app.Notification$Builder")
+        Channel = autoclass("android.app.NotificationChannel")
+        manager = activity.getSystemService(Context.NOTIFICATION_SERVICE)
+        importance = autoclass("android.app.NotificationManager").IMPORTANCE_LOW
+        manager.createNotificationChannel(Channel(PROGRESS_CHANNEL, "downloads", importance))
+
+        Intent = autoclass("android.content.Intent")
+        PendingIntent = autoclass("android.app.PendingIntent")
+        flags = PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
+        opening = PendingIntent.getActivity(activity, 0, Intent(activity, activity.getClass()), flags)
+
+        text = autoclass("java.lang.String")(f"{position} / {total}")
+        builder = Notification(activity, PROGRESS_CHANNEL)
+        builder.setContentTitle(cast("java.lang.CharSequence", autoclass("java.lang.String")("downloadity")))
+        builder.setContentText(cast("java.lang.CharSequence", text))
+        builder.setSmallIcon(activity.getApplicationInfo().icon)
+        builder.setContentIntent(opening)
+        builder.setOngoing(True)
+        builder.setOnlyAlertOnce(True)
+        builder.setProgress(total, position, False)
+        manager.notify(SERVICE_ID, builder.build())
+
+    def scan_file(path):
+        # New files stay hidden until scanned
+        scanner = autoclass("android.media.MediaScannerConnection")
+        scanner.scanFile(activity, [path], None, None)
+
     def share_file(path):
         # The media store grants shareable links
         videos = autoclass("android.provider.MediaStore$Video$Media").EXTERNAL_CONTENT_URI
@@ -126,6 +204,12 @@ else:
     def ask_notifications():
         pass
 
+    def show_progress(position, total):
+        pass
+
+    def scan_file(path):
+        pass
+
     def share_file(path):
         return False
 
@@ -136,7 +220,7 @@ LOGO = f"""
 ▐  ▌▐ ▐ ▐▟▟ ▐ ▐  ▐  ▐ ▐ ▗▀▜ ▐ ▐  ▐   ▐   ▙▌ 
 ▐▄▞ ▝▙▛  ▌▌ ▐ ▐  ▝▄ ▝▙▛ ▝▄▜ ▝▙█ ▗▟▄  ▝▄  ▜  
                                          ▞  
-                            {version}  ▝▘
+                            v {APP_VERSION}  ▝▘
 """
 
 def char_width(char, font_size, count=50):
@@ -148,6 +232,15 @@ def char_width(char, font_size, count=50):
     )
     label.refresh()
     return label.texture.size[0] / count
+
+def uniform_font(font_size):
+    # A grid needs equal glyph widths
+    size = math.ceil(font_size)
+    for candidate in range(size, size + 6):
+        if len({char_width(char, candidate) for char in RAMP}) == 1:
+            return candidate
+    return font_size
+
 
 def line_height(font_size):
     label = CoreLabel(
@@ -328,7 +421,8 @@ class AsciiButton(Button):
         self.text_label.color = c
 
 class AsciiPopup(ModalView):
-    def __init__(self, message, buttons, items=None, body=None, height=None, **kwargs):
+    def __init__(self, message, buttons, items=None, body=None, height=None, closable=True, **kwargs):
+        self.closable = closable
         super().__init__(
             size_hint=(None, None),
             size=(dp(320), height or (dp(420) if items else dp(230))),
@@ -354,6 +448,7 @@ class AsciiPopup(ModalView):
 
         text = mono_label(message, dp(15), markup=True)
         text.bind(size=text.setter("text_size"))
+        self.message = text
         if items:
             text.size_hint_y = None
             text.height = dp(40)
@@ -445,8 +540,9 @@ class DownloadityApp(App):
             media = resolve_media(url)
         except YoutubeBlockedError:
             media, blocked = None, True
-        except Exception:
+        except Exception as e:
             import traceback; traceback.print_exc()
+            updates.report(e)
             media = None
 
         Clock.schedule_once(
@@ -671,7 +767,6 @@ class DownloadityApp(App):
     #====================DOWNLOAD======================#
 
     def start_download(self, kind, quality, cut=None):
-        import time; self.debug_t0 = time.time(); print(f"DEBUG start {kind} {quality.label} items={len(self.media.entries)}", flush=True)
         keep_alive(True)
         self.kind = kind
         self.total_items = len(self.media.entries)
@@ -694,6 +789,7 @@ class DownloadityApp(App):
             prepare_extra=self.make_art,
             cut=cut,
             overwrite=self.overwrite,
+            on_saved=scan_file,
         )
         threading.Thread(target=self.run_queue, args=(queue,), daemon=True).start()
 
@@ -701,6 +797,7 @@ class DownloadityApp(App):
         try:
             queue.run()
         except Exception as e:
+            updates.report(e)
             error = str(e)
             Clock.schedule_once(lambda dt: self.show_finished(0, [], queue.output_dir, error))
         finally:
@@ -712,7 +809,7 @@ class DownloadityApp(App):
         info = entry.info["ytdlp_info"]
         cols, rows = self.art_dims(info)
         aspect = cols * self.art_cw / (rows * self.art_lh)
-        return cover_markup(info, cols, rows, aspect), cols, rows
+        return cover_markup(info, cols, rows, aspect, entry.cover), cols, rows
 
     def art_dims(self, info):
         if self.kind != "video":
@@ -732,6 +829,9 @@ class DownloadityApp(App):
 
     def on_item_start(self, item):
         Clock.schedule_once(lambda dt: self.show_item(item))
+        # Clock sleeps while minimized
+        if self.media.is_playlist:
+            show_progress(item.position, item.total)
 
     def on_progress(self, fraction):
         Clock.schedule_once(lambda dt: self.draw_bar(fraction))
@@ -750,7 +850,6 @@ class DownloadityApp(App):
         self.draw_bar(0)
 
     def show_item(self, item):
-        import time; print(f"DEBUG item {item.position}/{item.total} t={time.time() - self.debug_t0:.1f} {item.title}", flush=True)
         markup, cols, rows = item.extra or ("", *self.art_dims(None))
         self.set_art(markup, cols, rows)
         self.song_label.text = escape_markup(item.title)
@@ -779,7 +878,6 @@ class DownloadityApp(App):
         self.timer_label.text = f"{minutes:02d}:{seconds:02d}"
 
     def show_finished(self, done, failed, folder, error=None):
-        import time; print(f"DEBUG finished t={time.time() - self.debug_t0:.1f} done={done} failed={failed} folder={folder} error={error}", flush=True)
         self.timer_event.cancel()
         self.tick_timer(0)
         self.draw_bar(1)
@@ -798,19 +896,20 @@ class DownloadityApp(App):
         path = self.queue.last_path
         if self.kind == "video" and not self.media.is_playlist and path and not error:
             buttons.insert(0, ("share", lambda: self.share(path)))
-        AsciiPopup(escape_markup(message), buttons).open()
+        AsciiPopup(escape_markup(message), buttons, closable=False).open()
 
     def share(self, path):
         if share_file(path):
             self.reset_home()
         else:
-            AsciiPopup("could not share\nthis file", [("OK", self.reset_home)]).open()
+            AsciiPopup("could not share\nthis file", [("OK", self.reset_home)], closable=False).open()
 
     def show_failed(self, failed):
         AsciiPopup(
             f"{len(failed)} item(s) failed:",
             [("OK", self.reset_home)],
             items=failed,
+            closable=False,
         ).open()
 
     def reset_home(self):
@@ -824,8 +923,68 @@ class DownloadityApp(App):
     def on_start(self):
         # Shows download progress when minimized
         ask_notifications()
+        if platform == "android":
+            updates.confirm()
+            threading.Thread(target=self.check_updates, daemon=True).start()
+
+    # Updates (worker thread)
+
+    def check_updates(self):
+        """
+        A new APK comes with its libraries
+        """
+        try:
+            remove_update()
+            apk = SDK >= 29 and updates.latest_apk(APP_VERSION)
+        except Exception as e:
+            print("update: release check failed:", e)
+            apk = None
+
+        if apk:
+            Clock.schedule_once(lambda dt: self.update_app(apk))
+        else:
+            updates.check_libs()
+
+    def update_app(self, apk):
+        title = f"updating to\nv{apk['version']}"
+        popup = AsciiPopup(f"{title}\n\n0%", [], closable=False)
+        popup.open()
+        shown = [0]
+
+        def progress(fraction):
+            percent = int(fraction * 100)
+            if percent != shown[0]:
+                shown[0] = percent
+                Clock.schedule_once(lambda dt: setattr(popup.message, "text", f"{title}\n\n{percent}%"))
+
+        def work():
+            try:
+                uri = save_update(apk["url"], progress)
+            except Exception as e:
+                print("update: apk download failed:", e)
+                Clock.schedule_once(lambda dt: popup.dismiss())
+                return
+            Clock.schedule_once(lambda dt: (popup.dismiss(), install_apk(uri)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_back(self, window, key, *args):
+        if key != BACK_KEY:
+            return False
+
+        popup = next((w for w in Window.children if isinstance(w, AsciiPopup)), None)
+        if popup:
+            if popup.closable:
+                popup.choose(lambda: None)
+            return True
+
+        if self.screens.current == "qualities":
+            self.screens.current = "home"
+            return True
+        return False
 
     def build(self):
+        Window.bind(on_keyboard=self.on_back)
         self.screens = ScreenManager(transition=NoTransition())
 
         home = Screen(name="home")
@@ -1014,7 +1173,7 @@ class DownloadityApp(App):
         self.download_button = AsciiButton(
             "DOWNLOAD",
             size_hint=(None, None),
-            width=dp(280),
+            width=dp(210),
             pos_hint={"center_x": 0.5},
             font_size=dp(18),
             rows=5,
@@ -1053,7 +1212,7 @@ class DownloadityApp(App):
             halign="center",
             valign="bottom",
             font_name="DejaVuSansMono",
-            font_size=dp(12),
+            font_size=dp(8),
             size_hint_y=None,
             height=dp(20),
         )
@@ -1119,8 +1278,9 @@ class DownloadityApp(App):
     #===================DOWNLOADING====================#
 
     def build_downloading(self):
-        self.art_cw = char_width("@", ART_FONT)
-        self.art_lh = line_height(ART_FONT)
+        self.art_font = uniform_font(ART_FONT)
+        self.art_cw = char_width("@", self.art_font)
+        self.art_lh = line_height(self.art_font)
         self.art_rows = max(1, round(ART_COLS * self.art_cw / self.art_lh))
 
         self.downloading_root = BoxLayout(
@@ -1160,7 +1320,7 @@ class DownloadityApp(App):
 
         self.art_label = mono_label(
             "",
-            ART_FONT,
+            self.art_font,
             markup=True,
             size_hint_y=None,
             height=self.art_rows * self.art_lh,

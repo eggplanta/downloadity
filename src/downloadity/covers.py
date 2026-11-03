@@ -2,7 +2,10 @@
 Embeds a cover image in audio files
 """
 import base64
+import os
 import ssl
+import subprocess
+import tempfile
 import urllib.request
 from typing import Optional
 
@@ -11,30 +14,47 @@ from mutagen.flac import Picture
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.oggopus import OggOpus
 
+from . import downloader
+
 JPEG_MAGIC = b"\xff\xd8\xff"
 FRONT_COVER = 3
+WIDE_RATIO = 16 / 9
+YOUTUBE_THUMBS = ("maxresdefault", "hq720", "sddefault", "hqdefault")
+# 4:3 thumbnails hide bars above and below
+SQUARE_CROP = "crop=if(eq(iw*3\\,ih*4)\\,ih*3/4\\,min(iw\\,ih)):if(eq(iw*3\\,ih*4)\\,ih*3/4\\,min(iw\\,ih))"
 
 
-def thumbnail_url(info: dict) -> Optional[str]:
+def thumbnail_urls(info: dict) -> list[str]:
     """
-    Largest jpg, players can't show webp
+    Jpg thumbnails, best first
+    Signed links may serve webp instead
     """
     thumbs = [
         t for t in info.get("thumbnails") or []
         if ".jpg" in t.get("url", "") and t.get("width")
     ]
+    # YouTube hides big ones from the list
+    urls = []
+    if (info.get("extractor_key") or "").startswith("Youtube"):
+        urls = [f"https://i.ytimg.com/vi/{info.get('id')}/{name}.jpg" for name in YOUTUBE_THUMBS]
+
     if thumbs:
-        return max(thumbs, key=lambda t: t["width"])["url"]
+        return urls + [t["url"] for t in sorted(thumbs, key=_thumbnail_rank, reverse=True)]
 
     url = info.get("thumbnail")
-    return url if url and ".jpg" in url else None
+    return urls + ([url] if url and ".jpg" in url else [])
 
 
-def embed_cover(path: str, url: str) -> None:
-    data = _download(url)
-    if not data.startswith(JPEG_MAGIC):
-        raise ValueError("cover is not a jpeg")
+def cover_image(info: dict, album_cover: Optional[str] = None) -> bytes:
+    """
+    Square jpeg, album cover or thumbnail
+    """
+    if album_cover:
+        return _first_jpeg([album_cover])
+    return _square(_first_jpeg(thumbnail_urls(info)))
 
+
+def embed_cover(path: str, data: bytes) -> None:
     if path.endswith(".opus"):
         _embed_opus(path, data)
     else:
@@ -42,6 +62,43 @@ def embed_cover(path: str, url: str) -> None:
 
 
 # Internal helpers
+
+def _thumbnail_rank(thumb: dict) -> tuple:
+    height = thumb.get("height") or 0
+    wide = bool(height) and abs(thumb["width"] / height - WIDE_RATIO) < 0.05
+    return ("sqp=" not in thumb["url"], wide, thumb["width"])
+
+
+def _square(data: bytes) -> bytes:
+    with tempfile.TemporaryDirectory(dir=downloader.TEMP_DIR) as folder:
+        source = os.path.join(folder, "cover.jpg")
+        output = os.path.join(folder, "square.jpg")
+        with open(source, "wb") as f:
+            f.write(data)
+
+        subprocess.run(
+            [
+                downloader.FFMPEG, "-y", "-v", "error", "-i", source,
+                "-vf", f"{SQUARE_CROP},format=yuvj420p",
+                "-frames:v", "1", "-update", "1", "-q:v", "2", output,
+            ],
+            check=True,
+            capture_output=True,
+        )
+        with open(output, "rb") as f:
+            return f.read()
+
+
+def _first_jpeg(urls: list[str]) -> bytes:
+    for url in urls:
+        try:
+            data = _download(url)
+        except OSError:
+            continue
+        if data.startswith(JPEG_MAGIC):
+            return data
+    raise ValueError("no jpeg cover")
+
 
 def _download(url: str) -> bytes:
     # Android Python lacks system certificates

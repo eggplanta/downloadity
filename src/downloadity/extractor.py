@@ -1,5 +1,5 @@
 import yt_dlp
-from .throttle import throttle
+from .throttle import MAX_ATTEMPTS, throttle
 
 AUDIO_BITRATES = (32, 48, 64, 96, 128, 160, 192, 256, 320)
 
@@ -22,13 +22,17 @@ class SilentLogger:
     def debug(self, msg):
         pass
 
-    warning = error = debug
+    def warning(self, msg):
+        pass
+
+    error = warning
 
 
-def extract(url: str, flat: str | bool = False) -> dict:
+def extract(url: str, flat: str | bool = False, audio_only: bool = False, attempts: int = MAX_ATTEMPTS) -> dict:
     """
     Single media comes with formats
     Playlists need flat="in_playlist"
+    Audio only skips the HLS request
     """
     options = {
         "quiet": True,
@@ -37,11 +41,13 @@ def extract(url: str, flat: str | bool = False) -> dict:
         "extract_flat": flat,
         "logger": SilentLogger(),
     }
+    # HLS only adds video formats
+    if audio_only:
+        options["extractor_args"] = {"youtube": {"skip": ["hls"]}}
 
     try:
-        info = throttle.run(lambda: _extract_info(url, options))
+        info = throttle.run(lambda: _extract_info(url, options), attempts)
     except yt_dlp.utils.DownloadError as e:
-        print("DEBUG extract error:", e)
         return {
             "type": "error",
             "message": str(e),
@@ -144,6 +150,7 @@ def _get_audio_formats(formats: list, duration) -> list:
             "bitrate": _standard_bitrate(fmt["abr"]),
             "filesize": _filesize(fmt, duration),
             "codec": codec,
+            "native": _is_native(fmt),
         }
         for codec, fmt in best_by_codec.items()
     ]
@@ -153,8 +160,12 @@ def _audio_codec(fmt: dict) -> str:
     return "opus" if "opus" in (fmt.get("acodec") or "") else "m4a"
 
 
+def _is_native(fmt: dict) -> bool:
+    return (fmt.get("acodec") or "").startswith(("opus", "mp4a"))
+
+
 def _audio_rank(fmt: dict) -> tuple:
-    native = (fmt.get("acodec") or "").startswith(("opus", "mp4a"))
+    native = _is_native(fmt)
     drc = fmt.get("has_drc") or "drc" in str(fmt.get("format_id"))
     return (native, not drc, fmt["abr"])
 
