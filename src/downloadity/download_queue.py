@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Optional
 
-from .covers import cover_image, embed_cover
+from .covers import cover_image, embed_tags
 from .downloader import cut_video, download_audio, download_video
 from . import library
 from .extractor import VIDEO_LONG_SIDES
@@ -59,7 +59,7 @@ class DownloadQueue:
         if media.is_playlist:
             self.folder_name = safe_name(media.title or "playlist")
             found = library.find_folder(root_dir, media.playlist_id)
-            self.output_dir = found or os.path.join(root_dir, self.folder_name)
+            self.output_dir = found or library.free_folder(root_dir, self.folder_name)
 
     def run(self) -> None:
         # Renamed playlists rename their folder
@@ -217,11 +217,14 @@ class DownloadQueue:
 
         info = entry.info["ytdlp_info"]
         caption = caption_title(info)
-        options["filename"] = caption and safe_name(f"{caption} [{info.get('id')}]")
+        if caption:
+            options["filename"] = safe_name(f"{caption} [{info.get('id')}]")
+        elif self.kind == "audio":
+            options["filename"] = safe_name(song_name(entry))
 
         # Cuts download the full video first
         if self.cut:
-            base = options["filename"] or safe_name(info.get("title") or "video")
+            base = options.get("filename") or safe_name(info.get("title") or "video")
             options["filename"] = f"{base}.full"
             cut_progress = _CutProgress(report, expected, quality.height, info.get("fps"), self.cut)
             on_download = cut_progress.download
@@ -254,7 +257,7 @@ class DownloadQueue:
         if result["success"]:
             self.last_path = result.get("path")
         if result["success"] and self.kind == "audio":
-            self._add_cover(entry, info, result.get("path"))
+            self._add_tags(entry, result.get("path"))
         if result["success"] and self.on_saved and result.get("path"):
             self.on_saved(result["path"])
         if result["success"] and self.media.is_playlist:
@@ -277,18 +280,18 @@ class DownloadQueue:
         except Exception as e:
             print("cover failed:", e)
 
-    def _add_cover(self, entry: MediaEntry, info: dict, path: Optional[str]) -> None:
+    def _add_tags(self, entry: MediaEntry, path: Optional[str]) -> None:
         """
-        A missing cover never fails a download
+        Missing tags never fail a download
         """
-        data, entry.cover = entry.cover, None
-        if not path or not data:
+        cover, entry.cover = entry.cover, None
+        if not path:
             return
 
         try:
-            embed_cover(path, data)
+            embed_tags(path, cover, audio_tags(entry))
         except Exception as e:
-            print("cover failed:", e)
+            print("tags failed:", e)
 
     def _record(self, entry: MediaEntry, path: Optional[str]) -> None:
         """
@@ -483,6 +486,28 @@ class _PairDisplay:
         self.current += 1
         self.shown_at = time.monotonic()
         self.listener.on_item_start(self.items[self.current])
+
+
+def audio_tags(entry: MediaEntry) -> dict:
+    title, artist = display_names(entry)
+    track = entry.spotify_track
+    info = (entry.info or {}).get("ytdlp_info") or {}
+    tags = {
+        "title": title,
+        "artist": artist,
+        "album": track.album if track else info.get("album"),
+        "tracknumber": track.track_number if track else info.get("track_number"),
+        "date": track.year if track else info.get("release_year"),
+    }
+    return {key: str(value) for key, value in tags.items() if value}
+
+
+def song_name(entry: MediaEntry) -> str:
+    """
+    "Artist - Title" for music files
+    """
+    title, artist = display_names(entry)
+    return f"{artist} - {title}" if artist and title else title or artist or "audio"
 
 
 def display_names(entry: MediaEntry, video: bool = False) -> tuple[str, str]:

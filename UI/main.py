@@ -1,6 +1,7 @@
 import logging
 import math
 import os
+import re
 import threading
 import time
 
@@ -20,7 +21,7 @@ from kivy.uix.floatlayout import FloatLayout
 from kivy.utils import escape_markup, platform
 
 from downloadity import downloader, library, updates
-from downloadity.download_queue import DownloadQueue
+from downloadity.download_queue import DownloadQueue, display_names
 from downloadity.media import CheckError, resolve_media, subset
 from downloadity.throttle import YoutubeBlockedError
 from ascii_art import RAMP, cover_markup
@@ -133,10 +134,10 @@ if platform == "android":
     power = activity.getSystemService(autoclass("android.content.Context").POWER_SERVICE)
     wake_lock = power.newWakeLock(autoclass("android.os.PowerManager").PARTIAL_WAKE_LOCK, "downloadity:download")
 
-    def keep_alive(on):
+    def keep_alive(on, label=""):
         # Network and CPU survive minimizing
         if on:
-            service.start(activity, "", "downloadity", "downloading...", "")
+            service.start(activity, "", label, "", "")
             if not wake_lock.isHeld():
                 wake_lock.acquire()
         else:
@@ -148,7 +149,7 @@ if platform == "android":
         from android.permissions import Permission, request_permissions
         request_permissions([Permission.POST_NOTIFICATIONS])
 
-    def show_progress(position, total):
+    def show_progress(position, total, label):
         # Same id replaces the service notification
         Context = autoclass("android.content.Context")
         Notification = autoclass("android.app.Notification$Builder")
@@ -164,7 +165,7 @@ if platform == "android":
 
         text = autoclass("java.lang.String")(f"{position} / {total}")
         builder = Notification(activity, PROGRESS_CHANNEL)
-        builder.setContentTitle(cast("java.lang.CharSequence", autoclass("java.lang.String")("downloadity")))
+        builder.setContentTitle(cast("java.lang.CharSequence", autoclass("java.lang.String")(label)))
         builder.setContentText(cast("java.lang.CharSequence", text))
         builder.setSmallIcon(activity.getApplicationInfo().icon)
         builder.setContentIntent(opening)
@@ -200,13 +201,13 @@ if platform == "android":
 else:
     DOWNLOAD_ROOT = os.path.expanduser("~/Downloads/downloadity")
 
-    def keep_alive(on):
+    def keep_alive(on, label=""):
         pass
 
     def ask_notifications():
         pass
 
-    def show_progress(position, total):
+    def show_progress(position, total, label):
         pass
 
     def scan_file(path):
@@ -252,6 +253,13 @@ def line_height(font_size):
     )
     label.refresh()
     return label.texture.size[1]
+
+def download_label(media):
+    # Playlist name, else the song
+    name = media.title and re.sub(r" \[[^\]]+\]$", "", media.title)
+    if not name and media.entries:
+        name = display_names(media.entries[0])[0]
+    return f'downloading "{name}"' if name else "downloading"
 
 def mono_label(text, font_size, **kwargs):
     kwargs.setdefault("halign", "center")
@@ -776,7 +784,8 @@ class DownloadityApp(App):
     #====================DOWNLOAD======================#
 
     def start_download(self, kind, quality, cut=None):
-        keep_alive(True)
+        self.download_label = download_label(self.media)
+        keep_alive(True, self.download_label)
         self.kind = kind
         self.total_items = len(self.media.entries)
         self.swap_player(self.build_video_column() if kind == "video" else self.build_music_column())
@@ -845,7 +854,7 @@ class DownloadityApp(App):
         Clock.schedule_once(lambda dt: self.show_item(item))
         # Clock sleeps while minimized
         if self.media.is_playlist:
-            show_progress(item.position, item.total)
+            show_progress(item.position, item.total, self.download_label)
 
     def on_progress(self, fraction):
         Clock.schedule_once(lambda dt: self.draw_bar(fraction))

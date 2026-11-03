@@ -1,6 +1,8 @@
 import dataclasses
+import random
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
@@ -18,8 +20,10 @@ from .formats import (
 
 AUDIO_ONLY_HOSTS = ("spotify.com", "music.youtube.com")
 
-SAMPLE_MIN = 4
-SAMPLE_MAX = 8
+SAMPLE_MIN = 3
+SAMPLE_MAX = 6
+# Seconds between samples, randomized
+SAMPLE_GAP = (0.7, 1.3)
 SAMPLE_STEP = 10
 WORKERS = 3
 
@@ -49,6 +53,7 @@ REASONS = (
     ("no match found on YouTube", "no match found on YouTube"),
 )
 CAPTION_CHARS = 40
+ALBUM_PREFIX_IDS = "OLAK5uy_"
 
 
 @dataclass
@@ -118,6 +123,9 @@ def resolve_media(url: str) -> Media:
         if info["type"] == "playlist":
             caption = caption_title(info)
             title = f"{caption} [{info.get('id')}]" if caption else info.get("title")
+            # YT Music albums: "Album - Name"
+            if title and (info.get("id") or "").startswith(ALBUM_PREFIX_IDS):
+                title = title.removeprefix("Album - ")
             entries = [
                 MediaEntry(
                     url=e["url"],
@@ -195,7 +203,7 @@ def caption_title(info: dict) -> Optional[str]:
 
 def sample_indices(count: int) -> list[int]:
     """
-    One more per 10 items (4 to 8), evenly spaced
+    One more per 10 items (3 to 6), evenly spaced
     """
     extra = max(0, count - 1) // SAMPLE_STEP
     size = min(count, SAMPLE_MAX, SAMPLE_MIN + extra)
@@ -245,7 +253,11 @@ def _extract_samples(entries: list[MediaEntry]) -> list[MediaEntry]:
     try:
         while picks:
             pending = [entries[i] for i in picks if entries[i].info is None]
-            futures = [executor.submit(extract_entry, e, CHECK_ATTEMPTS) for e in pending]
+            futures = []
+            for entry in pending:
+                if futures:
+                    _space_samples(futures)
+                futures.append(executor.submit(extract_entry, entry, CHECK_ATTEMPTS))
             for future in as_completed(futures):
                 future.result()
 
@@ -267,6 +279,19 @@ def _extract_samples(entries: list[MediaEntry]) -> list[MediaEntry]:
         executor.shutdown(wait=False, cancel_futures=True)
 
     return samples
+
+
+def _space_samples(futures: list) -> None:
+    """
+    Random gap like a person
+    A block still surfaces right away
+    """
+    gap = random.uniform(*SAMPLE_GAP)
+    start = time.monotonic()
+    done, _ = wait(futures, timeout=gap, return_when=FIRST_EXCEPTION)
+    for future in done:
+        future.result()
+    time.sleep(max(0.0, gap - (time.monotonic() - start)))
 
 
 def _next_unused(entries: list[MediaEntry], index: int, used: set) -> Optional[int]:

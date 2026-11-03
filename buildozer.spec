@@ -3,7 +3,7 @@
 title = downloadity
 package.name = downloadity
 package.domain = io.github.eggplanta
-version = 1.0.1
+version = 1.0.2
 
 source.dir = .
 source.include_exts = py,ttf

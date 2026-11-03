@@ -33,6 +33,8 @@ _YDL_SEARCH_OPTS = {
     "no_warnings": True,
     "extract_flat": "in_playlist",
     "skip_download": True,
+    # Homepage fetch doubles the requests
+    "extractor_args": {"youtubetab": {"skip": ["webpage"]}},
 }
 
 # Score weights: higher score = better candidate
@@ -49,6 +51,9 @@ class _SpotifyTrack:
     duration_ms: int
     id: Optional[str] = None
     cover_url: Optional[str] = None
+    album: Optional[str] = None
+    track_number: Optional[int] = None
+    year: Optional[str] = None
 
     @property
     def search_queries(self) -> list[tuple[str, str]]:
@@ -85,23 +90,29 @@ def _cover_url(data: SpotifyTrackData) -> Optional[str]:
     return max(images, key=lambda image: image.width or 0).url if images else None
 
 
-def _track_from_data(data: SpotifyTrackData) -> _SpotifyTrack:
+def _track_from_data(data: SpotifyTrackData, album=None) -> _SpotifyTrack:
+    # Album tracks lack their own album
+    album = album or data.album
+    date = data.release_date or getattr(album, "release_date", None)
     return _SpotifyTrack(
         title=data.name,
         artists=list(dict.fromkeys(artist.name for artist in data.artists)),
         duration_ms=data.duration_ms,
         id=data.id,
         cover_url=_cover_url(data),
+        album=album and album.name,
+        track_number=data.track_number,
+        year=date and str(date)[:4],
     )
 
 
-def _safe_convert(raw_tracks) -> list[_SpotifyTrack]:
+def _safe_convert(raw_tracks, album=None) -> list[_SpotifyTrack]:
     """Skip individual tracks that fail to parse."""
     tracks = []
 
     for raw in raw_tracks:
         try:
-            tracks.append(_track_from_data(raw))
+            tracks.append(_track_from_data(raw, album))
         except (AttributeError, KeyError, TypeError):
             continue
 
@@ -462,7 +473,7 @@ def get_collection(url: str) -> tuple[Optional[str], list[_SpotifyTrack]]:
 
     if "/album/" in url:
         album = client.get_album(url)
-        return album.name, _safe_convert(album.tracks)
+        return album.name, _safe_convert(album.tracks, album)
 
     if "/playlist/" in url:
         playlist = client.get_playlist(url, max_tracks=NO_TRACK_LIMIT)

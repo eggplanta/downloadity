@@ -19,6 +19,8 @@ from . import downloader
 JPEG_MAGIC = b"\xff\xd8\xff"
 FRONT_COVER = 3
 WIDE_RATIO = 16 / 9
+# Tag name -> MP4 atom
+M4A_KEYS = {"title": "\xa9nam", "artist": "\xa9ART", "album": "\xa9alb", "date": "\xa9day"}
 YOUTUBE_THUMBS = ("maxresdefault", "hq720", "sddefault", "hqdefault")
 # 4:3 thumbnails hide bars above and below
 SQUARE_CROP = "crop=if(eq(iw*3\\,ih*4)\\,ih*3/4\\,min(iw\\,ih)):if(eq(iw*3\\,ih*4)\\,ih*3/4\\,min(iw\\,ih))"
@@ -54,11 +56,14 @@ def cover_image(info: dict, album_cover: Optional[str] = None) -> bytes:
     return _square(_first_jpeg(thumbnail_urls(info)))
 
 
-def embed_cover(path: str, data: bytes) -> None:
+def embed_tags(path: str, cover: Optional[bytes], tags: dict) -> None:
+    """
+    Cover plus title, artist, album, track, year
+    """
     if path.endswith(".opus"):
-        _embed_opus(path, data)
+        _embed_opus(path, cover, tags)
     else:
-        _embed_m4a(path, data)
+        _embed_m4a(path, cover, tags)
 
 
 # Internal helpers
@@ -107,18 +112,26 @@ def _download(url: str) -> bytes:
         return response.read()
 
 
-def _embed_m4a(path: str, data: bytes) -> None:
+def _embed_m4a(path: str, cover: Optional[bytes], tags: dict) -> None:
     audio = MP4(path)
-    audio["covr"] = [MP4Cover(data, imageformat=MP4Cover.FORMAT_JPEG)]
+    if cover:
+        audio["covr"] = [MP4Cover(cover, imageformat=MP4Cover.FORMAT_JPEG)]
+    for key, value in tags.items():
+        if key == "tracknumber":
+            audio["trkn"] = [(int(value), 0)]
+        else:
+            audio[M4A_KEYS[key]] = [value]
     audio.save()
 
 
-def _embed_opus(path: str, data: bytes) -> None:
-    picture = Picture()
-    picture.type = FRONT_COVER
-    picture.mime = "image/jpeg"
-    picture.data = data
-
+def _embed_opus(path: str, cover: Optional[bytes], tags: dict) -> None:
     audio = OggOpus(path)
-    audio["metadata_block_picture"] = [base64.b64encode(picture.write()).decode("ascii")]
+    if cover:
+        picture = Picture()
+        picture.type = FRONT_COVER
+        picture.mime = "image/jpeg"
+        picture.data = cover
+        audio["metadata_block_picture"] = [base64.b64encode(picture.write()).decode("ascii")]
+    for key, value in tags.items():
+        audio[key] = [value]
     audio.save()

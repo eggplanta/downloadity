@@ -26,6 +26,17 @@ def find_folder(root: str, playlist_id: Optional[str]) -> Optional[str]:
     return None
 
 
+def free_folder(root: str, name: str) -> str:
+    """
+    Name taken by another playlist gets a number
+    """
+    folder, number = os.path.join(root, name), 2
+    while os.path.exists(folder):
+        folder = os.path.join(root, f"{name} ({number})")
+        number += 1
+    return folder
+
+
 def rename_folder(folder: str, name: str) -> str:
     """
     Follows the playlist's new name
