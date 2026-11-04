@@ -62,6 +62,8 @@ VIDEO_CONTROLS = "▮◀   ❚❚   ▶▮"
 VIDEO_ASPECT = 16 / 9
 VIDEO_ASPECTS = (0.5, 2.4)
 BACK_KEY = 27
+# Background time before starting over
+RESTART_AFTER = 10 * 60
 SERVICE_ID = 1
 PROGRESS_CHANNEL = "downloads"
 
@@ -82,7 +84,7 @@ if platform == "android":
     APP_VERSION = activity.getPackageManager().getPackageInfo(activity.getPackageName(), 0).versionName
     SDK = autoclass("android.os.Build$VERSION").SDK_INT
 
-    def save_update(url, on_progress):
+    def save_update(url, on_progress, sha256=None):
         """
         Public downloads, the installer reads it
         """
@@ -99,7 +101,7 @@ if platform == "android":
         try:
             descriptor = resolver.openFileDescriptor(uri, "w")
             with os.fdopen(descriptor.detachFd(), "wb") as f:
-                updates.download(url, f, on_progress)
+                updates.download(url, f, on_progress, sha256)
         except Exception:
             resolver.delete(uri, None, None)
             raise
@@ -110,9 +112,23 @@ if platform == "android":
         return uri
 
     def remove_update():
-        # Installed or declined, either way
+        """
+        Installed, declined or interrupted
+        Interrupted ones stay pending, hidden by default
+        """
+        MediaStore = autoclass("android.provider.MediaStore")
         downloads = autoclass("android.provider.MediaStore$Downloads").EXTERNAL_CONTENT_URI
-        activity.getContentResolver().delete(downloads, "_display_name LIKE ?", ["downloadity-update%"])
+        resolver = activity.getContentResolver()
+        if SDK >= 30:
+            ContentResolver = autoclass("android.content.ContentResolver")
+            args = autoclass("android.os.Bundle")()
+            args.putString(ContentResolver.QUERY_ARG_SQL_SELECTION, "_display_name LIKE ?")
+            args.putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, ["downloadity-update%"])
+            args.putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_INCLUDE)
+            resolver.delete(downloads, args)
+        else:
+            downloads = MediaStore.setIncludePending(downloads)
+            resolver.delete(downloads, "_display_name LIKE ?", ["downloadity-update%"])
 
     def install_apk(uri):
         Intent = autoclass("android.content.Intent")
@@ -121,6 +137,17 @@ if platform == "android":
         intent.setDataAndType(uri, APK_TYPE)
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK)
         activity.startActivity(intent)
+
+    def can_install():
+        # "Allow from this source" toggle
+        return activity.getPackageManager().canRequestPackageInstalls()
+
+    def open_install_settings():
+        Intent = autoclass("android.content.Intent")
+        Settings = autoclass("android.provider.Settings")
+        Uri = autoclass("android.net.Uri")
+        package = Uri.parse("package:" + activity.getPackageName())
+        activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, package))
 
     @run_on_ui_thread
     def clear_system_bars():
@@ -221,6 +248,12 @@ else:
 
     def share_file(path):
         return False
+
+    def can_install():
+        return True
+
+    def open_install_settings():
+        pass
 
 LOGO = f"""
 ▗▄▖             ▝▜            ▐  ▝   ▗      
@@ -543,6 +576,9 @@ class AsciiPopup(ModalView):
         label.text = "\n".join(lines)
 
 class DownloadityApp(App):
+    pending_apk = None
+    paused_at = None
+    updating = False
 
     def on_text_change(self, instance, value):
         if hasattr(self, "check_event"):
@@ -977,8 +1013,13 @@ class DownloadityApp(App):
         """
         A new APK comes with its libraries
         """
+        # Cleanup never blocks the check
         try:
             remove_update()
+        except Exception as e:
+            print("update: cleanup failed:", e)
+
+        try:
             apk = SDK >= 29 and updates.latest_apk(APP_VERSION)
         except Exception as e:
             print("update: release check failed:", e)
@@ -993,14 +1034,62 @@ class DownloadityApp(App):
         # Asked again on every launch
         AsciiPopup(
             f"new version v{apk['version']}\n\nupdate now?",
-            [("yes", lambda: self.update_app(apk)), ("no", self.skip_update)],
+            [("yes", lambda: self.start_update(apk)), ("no", self.skip_update)],
             closable=False,
         ).open()
+
+    def start_update(self, apk):
+        # Without permission the download is wasted
+        if can_install():
+            self.update_app(apk)
+        else:
+            self.ask_install_permission(apk)
+
+    def ask_install_permission(self, apk):
+        AsciiPopup(
+            "to update, allow your\nphone to install apps\nfrom this source\n\nthen come back here",
+            [("settings", lambda: self.open_settings(apk)), ("later", self.skip_update)],
+            height=dp(260),
+            closable=False,
+        ).open()
+
+    def open_settings(self, apk):
+        self.pending_apk = apk
+        open_install_settings()
+
+    def on_pause(self):
+        self.paused_at = time.time()
+        return True
+
+    def on_resume(self):
+        # Back from the permission screen
+        apk, self.pending_apk = self.pending_apk, None
+        if apk:
+            self.start_update(apk)
+        elif self.stale():
+            self.restart()
+
+    def stale(self):
+        # Wall clock counts deep sleep too
+        away = time.time() - (self.paused_at or time.time())
+        busy = self.updating or self.screens.current == "downloading"
+        return away > RESTART_AFTER and not busy
+
+    def restart(self):
+        """
+        Long pauses start over, checking updates
+        """
+        for popup in [w for w in Window.children if isinstance(w, AsciiPopup)]:
+            popup.dismiss()
+        self.reset_home()
+        if platform == "android":
+            threading.Thread(target=self.check_updates, daemon=True).start()
 
     def skip_update(self):
         threading.Thread(target=updates.check_libs, daemon=True).start()
 
     def update_app(self, apk):
+        self.updating = True
         title = mono_label(f"downloading v{apk['version']}", dp(15), size_hint_y=None, height=dp(24))
         bar = mono_label("", LINE_FONT, markup=True, size_hint_y=None, height=dp(20))
         percent = mono_label("0%", dp(13), color=GRAY, size_hint_y=None, height=dp(20))
@@ -1025,17 +1114,23 @@ class DownloadityApp(App):
                 Clock.schedule_once(lambda dt: show(fraction))
 
         def failed():
+            self.updating = False
             popup.dismiss()
             AsciiPopup("update failed\n\ntry again later", [("OK", self.skip_update)], closable=False).open()
 
         def work():
             try:
-                uri = save_update(apk["url"], progress)
+                uri = save_update(apk["url"], progress, apk.get("sha256"))
             except Exception as e:
                 print("update: apk download failed:", e)
                 Clock.schedule_once(lambda dt: failed())
                 return
-            Clock.schedule_once(lambda dt: (popup.dismiss(), install_apk(uri)))
+            Clock.schedule_once(lambda dt: installed(uri))
+
+        def installed(uri):
+            self.updating = False
+            popup.dismiss()
+            install_apk(uri)
 
         threading.Thread(target=work, daemon=True).start()
 

@@ -14,6 +14,7 @@ import ssl
 import sys
 import threading
 import traceback
+import urllib.error
 import urllib.request
 import zipfile
 from typing import Optional
@@ -24,6 +25,9 @@ import certifi
 LIBS = {"yt-dlp": "yt_dlp", "spotifyscraper": "spotify_scraper"}
 PYPI_URL = "https://pypi.org/pypi/{}/json"
 RELEASES_URL = "https://api.github.com/repos/eggplanta/downloadity/releases/latest"
+# No API limit, redirects to the tag
+RELEASES_PAGE = "https://github.com/eggplanta/downloadity/releases/latest"
+APK_URL = "https://github.com/eggplanta/downloadity/releases/download/v{0}/downloadity-{0}-arm64-v8a-release.apk"
 STATE_FILE = "state.json"
 TIMEOUT = 20
 CHUNK = 1 << 16
@@ -138,14 +142,24 @@ def latest_apk(current: str) -> Optional[dict]:
     """
     Newer release with an APK, or None
     """
-    release = _get_json(RELEASES_URL)
+    try:
+        release = _get_json(RELEASES_URL)
+    except urllib.error.HTTPError as e:
+        # Shared IPs exhaust the API limit
+        if e.code not in (403, 429):
+            raise
+        return _latest_from_page(current)
+
     version = (release.get("tag_name") or "").lstrip("v")
     if not version or _key(version) <= _key(current):
         return None
 
     for asset in release.get("assets") or []:
         if asset.get("name", "").endswith(".apk"):
-            return {"version": version, "url": asset["browser_download_url"], "size": asset.get("size")}
+            # Corrupt downloads never reach the installer
+            digest = asset.get("digest") or ""
+            sha256 = digest.removeprefix("sha256:") if digest.startswith("sha256:") else None
+            return {"version": version, "url": asset["browser_download_url"], "size": asset.get("size"), "sha256": sha256}
     return None
 
 
@@ -164,11 +178,22 @@ def download(url: str, file, on_progress=None, sha256: Optional[str] = None) -> 
             if on_progress and total:
                 on_progress(done / total)
 
+    if total and done != total:
+        raise ValueError("incomplete download")
     if sha256 and digest.hexdigest() != sha256:
         raise ValueError("checksum mismatch")
 
 
 # Internal helpers
+
+def _latest_from_page(current: str) -> Optional[dict]:
+    with _open(RELEASES_PAGE, method="HEAD") as response:
+        tag = response.geturl().rstrip("/").rsplit("/", 1)[-1]
+    version = tag.lstrip("v")
+    if not re.fullmatch(r"\d+(\.\d+)*", version) or _key(version) <= _key(current):
+        return None
+    return {"version": version, "url": APK_URL.format(version), "size": None, "sha256": None}
+
 
 def _check_lib(name: str) -> None:
     info = _get_json(PYPI_URL.format(name))
@@ -288,8 +313,8 @@ def _get_json(url: str) -> dict:
         return json.load(response)
 
 
-def _open(url: str):
+def _open(url: str, method: str = "GET"):
     # Android Python lacks system certificates
     context = ssl.create_default_context(cafile=certifi.where())
-    request = urllib.request.Request(url, headers={"User-Agent": "downloadity"})
+    request = urllib.request.Request(url, headers={"User-Agent": "downloadity"}, method=method)
     return urllib.request.urlopen(request, timeout=TIMEOUT, context=context)
