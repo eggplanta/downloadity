@@ -18,6 +18,8 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.screenmanager import ScreenManager, Screen, NoTransition
 from kivy.uix.modalview import ModalView
 from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.widget import Widget
+from kivy.graphics import Color, Rectangle
 from kivy.utils import escape_markup, platform
 
 from downloadity import downloader, library, updates
@@ -328,22 +330,9 @@ def mono_label(text, font_size, **kwargs):
         **kwargs,
     )
 
-def vertical_line():
-    lh = line_height(LINE_FONT)
-    label = mono_label(
-        "",
-        LINE_FONT,
-        size_hint_x=None,
-        width=char_width("│", LINE_FONT),
-        valign="top",
-    )
-
-    def redraw(_instance, size):
-        label.text_size = size
-        label.text = "\n".join(["│"] * max(1, math.ceil(size[1] / lh)))
-
-    label.bind(size=redraw)
-    return label
+def line_gap():
+    # Room for a drawn line
+    return Widget(size_hint_x=None, width=char_width("│", LINE_FONT))
 
 def parse_time(text):
     """
@@ -1409,27 +1398,36 @@ class DownloadityApp(App):
 
         header = BoxLayout(size_hint_y=None, height=lh * 5)
         header.add_widget(mono_label("♪ AUDIO", dp(24)))
-        header.add_widget(vertical_line())
+        header.add_widget(line_gap())
         header.add_widget(mono_label("▶ VIDEO", dp(24)))
         table.add_widget(header)
 
-        dash_width = char_width("─", LINE_FONT)
-        divider = mono_label("", LINE_FONT, size_hint_y=None, height=lh)
-
-        def redraw_divider(_instance, width):
-            side = max(1, int((width - dash_width) / 2 / dash_width))
-            divider.text = "─" * side + "┼" + "─" * side
-
-        divider.bind(width=redraw_divider)
+        divider = Widget(size_hint_y=None, height=lh)
         table.add_widget(divider)
 
         body = BoxLayout()
         audio_scroll, self.audio_column = quality_column()
         video_scroll, self.video_column = quality_column()
         body.add_widget(audio_scroll)
-        body.add_widget(vertical_line())
+        body.add_widget(line_gap())
         body.add_widget(video_scroll)
         table.add_widget(body)
+
+        # Drawn, glyph stacks leave gaps
+        stroke = max(1, round(dp(0.9)))
+        with table.canvas.after:
+            Color(1, 1, 1, 1)
+            column_line = Rectangle()
+            row_line = Rectangle()
+
+        def redraw_lines(*_args):
+            column_line.pos = (round(table.center_x - stroke / 2), body.y)
+            column_line.size = (stroke, header.top - body.y)
+            row_line.pos = (divider.x, round(divider.center_y - stroke / 2))
+            row_line.size = (divider.width, stroke)
+
+        for widget in (table, header, divider, body):
+            widget.bind(pos=redraw_lines, size=redraw_lines)
 
         root.add_widget(table)
 
