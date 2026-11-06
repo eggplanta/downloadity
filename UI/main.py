@@ -745,10 +745,10 @@ class DownloadityApp(App):
         # Single videos can be cut
         if kind == "video" and not self.media.is_playlist:
             AsciiPopup(
-                "full video?" + usage,
+                "download the full\nvideo or cut it?" + usage,
                 [
-                    ("yes", lambda: self.start_download(kind, quality)),
-                    ("no, cut", lambda: self.ask_cut(quality)),
+                    ("cut video", lambda: self.ask_cut(quality)),
+                    ("full video", lambda: self.start_download(kind, quality)),
                 ],
             ).open()
             return
