@@ -1,14 +1,9 @@
 <div align="center">
 
-```
-▗▄▖             ▝▜            ▐  ▝   ▗      
-▐ ▝▖ ▄▖ ▖  ▖▗▗▖  ▐   ▄▖  ▄▖  ▄▟ ▗▄  ▗▟▄ ▗ ▗ 
-▐  ▌▐▘▜ ▚▗▗▘▐▘▐  ▐  ▐▘▜ ▝ ▐ ▐▘▜  ▐   ▐  ▝▖▞ 
-▐  ▌▐ ▐ ▐▟▟ ▐ ▐  ▐  ▐ ▐ ▗▀▜ ▐ ▐  ▐   ▐   ▙▌ 
-▐▄▞ ▝▙▛  ▌▌ ▐ ▐  ▝▄ ▝▙▛ ▝▄▜ ▝▙█ ▗▟▄  ▝▄  ▜  
-                                         ▞  
-                                       ▝▘
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
+  <img src="docs/logo-light.svg" alt="downloadity" width="420">
+</picture>
 
 ![status](https://img.shields.io/badge/status-working-brightgreen)
 [![release](https://img.shields.io/github/v/release/eggplanta/downloadity?label=latest)](https://github.com/eggplanta/downloadity/releases/latest)
@@ -25,9 +20,16 @@ The files go straight to your phone, with cover art and tags, and there are **no
 
 <div align="center">
 
-| Home | Qualities | Cut a video | Downloading |
-|:---:|:---:|:---:|:---:|
-| <img src="docs/screenshots/home.png" width="200"> | <img src="docs/screenshots/qualities.png" width="200"> | <img src="docs/screenshots/cut.png" width="200"> | <img src="docs/screenshots/player.png" width="200"> |
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/home.png" width="240"><br><sub>Paste any link</sub><br><br></td>
+    <td align="center"><img src="docs/screenshots/qualities.png" width="240"><br><sub>Pick a quality</sub><br><br></td>
+  </tr>
+  <tr>
+    <td align="center"><br><img src="docs/screenshots/cut.png" width="240"><br><sub>Cut a video</sub></td>
+    <td align="center"><br><img src="docs/screenshots/player.png" width="240"><br><sub>Download a playlist</sub></td>
+  </tr>
+</table>
 
 </div>
 
