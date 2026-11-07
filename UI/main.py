@@ -1,9 +1,12 @@
+import json
+import locale
 import logging
 import math
 import os
 import re
 import threading
 import time
+import webbrowser
 
 from kivy.app import App
 from kivy.core.window import Window
@@ -27,6 +30,8 @@ from downloadity.download_queue import DownloadQueue, display_names
 from downloadity.media import CheckError, resolve_media, subset
 from downloadity.throttle import YoutubeBlockedError
 from ascii_art import RAMP, cover_markup
+import i18n
+from i18n import t
 
 Window.clearcolor = (0, 0, 0, 1)
 # Focused field stays above keyboard
@@ -39,18 +44,33 @@ LabelBase.register(
     os.path.join(FONTS_DIR, "DejaVuSansMono.ttf"),
     fn_bold=os.path.join(FONTS_DIR, "DejaVuSansMono-Bold.ttf"),
 )
+# Only the app texts' Chinese glyphs
+LabelBase.register("NotoSansMonoCJK", os.path.join(FONTS_DIR, "NotoSansMonoCJKtc-subset.ttf"))
+CJK_CHARS = {c for text in i18n.all_texts() for c in text if ord(c) >= 0x2E80}
 
 # Kivy logs third-party debug otherwise
 logging.getLogger().setLevel(logging.WARNING)
 
-APP_VERSION = "1.0.0"
+def spec_version():
+    # Desktop runs read the build spec
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "buildozer.spec")
+    try:
+        with open(path) as f:
+            return re.search(r"^version\s*=\s*(\S+)", f.read(), re.M).group(1)
+    except (OSError, AttributeError):
+        return "dev"
+
+
+APP_VERSION = spec_version()
 APK_TYPE = "application/vnd.android.package-archive"
 UPDATE_NAME = "downloadity-update.apk"
+REPO_URL = "https://github.com/eggplanta/downloadity"
+# Ko-fi link pending
+DONATE_URL = None
 
 LINE_FONT = dp(12)
 POPUP_SIDE = dp(40)
-CHECKING_FRAMES = ("checking ..", "checking. .", "checking.. ", "checking...")
-BLOCKED_TEXT = "YouTube is blocking this network\ntry again later or use mobile data"
+CHECKING_DOTS = (" ..", ". .", ".. ", "...")
 
 ART_FONT = dp(7)
 ART_COLS = 72
@@ -151,6 +171,14 @@ if platform == "android":
         package = Uri.parse("package:" + activity.getPackageName())
         activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, package))
 
+    def open_url(url):
+        Intent = autoclass("android.content.Intent")
+        Uri = autoclass("android.net.Uri")
+        activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+
+    def system_locale():
+        return autoclass("java.util.Locale").getDefault().toLanguageTag()
+
     @run_on_ui_thread
     def clear_system_bars():
         # No scrim, light icons on black
@@ -191,7 +219,7 @@ if platform == "android":
         Channel = autoclass("android.app.NotificationChannel")
         manager = activity.getSystemService(Context.NOTIFICATION_SERVICE)
         importance = autoclass("android.app.NotificationManager").IMPORTANCE_LOW
-        manager.createNotificationChannel(Channel(PROGRESS_CHANNEL, "downloads", importance))
+        manager.createNotificationChannel(Channel(PROGRESS_CHANNEL, t("downloads_channel"), importance))
 
         Intent = autoclass("android.content.Intent")
         PendingIntent = autoclass("android.app.PendingIntent")
@@ -257,6 +285,12 @@ else:
     def open_install_settings():
         pass
 
+    def open_url(url):
+        webbrowser.open(url)
+
+    def system_locale():
+        return locale.getlocale()[0] or os.environ.get("LANG", "")
+
 LOGO = f"""
 ▗▄▖             ▝▜            ▐  ▝   ▗      
 ▐ ▝▖ ▄▖ ▖  ▖▗▗▖  ▐   ▄▖  ▄▖  ▄▟ ▗▄  ▗▟▄ ▗ ▗ 
@@ -276,6 +310,13 @@ def char_width(char, font_size, count=50):
     )
     label.refresh()
     return label.texture.size[0] / count
+
+def text_width(text, font_size):
+    font = "NotoSansMonoCJK" if not CJK_CHARS.isdisjoint(text) else "DejaVuSansMono"
+    label = CoreLabel(text=text, font_name=font, font_size=font_size)
+    label.refresh()
+    return label.texture.size[0]
+
 
 def uniform_font(font_size):
     # A grid needs equal glyph widths
@@ -317,18 +358,29 @@ def download_label(media):
     name = media.title and re.sub(r" \[[^\]]+\]$", "", media.title)
     if not name and media.entries:
         name = display_names(media.entries[0])[0]
-    return f'downloading "{name}"' if name else "downloading"
+    return t("downloading_name", name=name) if name else t("downloading")
 
 def mono_label(text, font_size, **kwargs):
     kwargs.setdefault("halign", "center")
     kwargs.setdefault("valign", "middle")
     kwargs.setdefault("color", (1, 1, 1, 1))
-    return Label(
+    return TextLabel(
         text=text,
         font_name="DejaVuSansMono",
         font_size=font_size,
         **kwargs,
     )
+
+
+class TextLabel(Label):
+    # Chinese text switches font
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.on_text(self, self.text)
+
+    def on_text(self, _instance, text):
+        cjk = not CJK_CHARS.isdisjoint(text)
+        self.font_name = "NotoSansMonoCJK" if cjk else "DejaVuSansMono"
 
 def line_gap():
     # Room for a drawn line
@@ -426,7 +478,7 @@ class AsciiButton(Button):
         )
         self.border_label.bind(size=self.border_label.setter("text_size"))
 
-        self.text_label = Label(
+        self.text_label = TextLabel(
             text=label,
             font_name="DejaVuSansMono",
             font_size=font_size,
@@ -476,11 +528,11 @@ class AsciiButton(Button):
         self.text_label.color = c
 
 class AsciiPopup(ModalView):
-    def __init__(self, message, buttons, items=None, body=None, height=None, closable=True, **kwargs):
+    def __init__(self, message, buttons, items=None, body=None, height=None, width=dp(320), closable=True, **kwargs):
         self.closable = closable
         super().__init__(
             size_hint=(None, None),
-            size=(min(dp(320), Window.width - dp(24)), height or (dp(420) if items else dp(230))),
+            size=(min(width, Window.width - dp(24)), height or (dp(420) if items else dp(230))),
             auto_dismiss=False,
             background="",
             background_color=(0, 0, 0, 1),
@@ -504,11 +556,16 @@ class AsciiPopup(ModalView):
         # Body alone when no message
         if message is not None:
             text = mono_label(message, dp(15), markup=True)
-            text.bind(size=text.setter("text_size"))
             self.message = text
             if items:
+                # Grows with longer translations
                 text.size_hint_y = None
-                text.height = dp(40)
+                text.bind(
+                    width=lambda label, width: setattr(label, "text_size", (width, None)),
+                    texture_size=lambda label, size: setattr(label, "height", max(dp(40), size[1])),
+                )
+            else:
+                text.bind(size=text.setter("text_size"))
             content.add_widget(text)
 
         if items:
@@ -600,13 +657,13 @@ class DownloadityApp(App):
         try:
             media = resolve_media(url)
         except YoutubeBlockedError:
-            error = BLOCKED_TEXT
+            error = t("blocked")
         except CheckError as e:
-            error = str(e)
+            error = i18n.error(str(e))
         except Exception as e:
             import traceback; traceback.print_exc()
             updates.report(e)
-            error = f"unexpected error\n{type(e).__name__}: {str(e)[:80]}"
+            error = f"{t('unexpected_error')}\n{type(e).__name__}: {str(e)[:80]}"
 
         Clock.schedule_once(
             lambda dt: self.show_result(url, media, error)
@@ -646,13 +703,13 @@ class DownloadityApp(App):
             return
 
         self.checking_frame = 0
-        self.checking_label.text = CHECKING_FRAMES[0]
+        self.checking_label.text = t("checking") + CHECKING_DOTS[0]
         self.show_in_result_area(self.checking_label)
         self.checking_event = Clock.schedule_interval(self.animate_checking, 0.3)
 
     def animate_checking(self, dt):
-        self.checking_frame = (self.checking_frame + 1) % len(CHECKING_FRAMES)
-        self.checking_label.text = CHECKING_FRAMES[self.checking_frame]
+        self.checking_frame = (self.checking_frame + 1) % len(CHECKING_DOTS)
+        self.checking_label.text = t("checking") + CHECKING_DOTS[self.checking_frame]
 
     def show_in_result_area(self, widget):
         if widget is not self.checking_label and self.checking_event:
@@ -684,13 +741,13 @@ class DownloadityApp(App):
     def ask_repeat(self, folder):
         kind = library.previous_kind(folder)
         new = library.new_entries(folder, kind, self.media.entries)
-        count = f"{len(new)} new item(s)" if new else "no new items"
+        count = t("new_items", n=len(new)) if new else t("no_new_items")
 
         popup = AsciiPopup(
-            f"this playlist was\ndownloaded before:\n\n{count}",
+            t("downloaded_before", count=count),
             [
-                ("all", self.repeat_all),
-                ("only new", lambda: self.repeat_new(new)),
+                (t("all"), self.repeat_all),
+                (t("only_new"), lambda: self.repeat_new(new)),
             ],
         )
         popup.buttons[1].disabled = not new
@@ -709,7 +766,7 @@ class DownloadityApp(App):
         self.link_input.focus = False
 
         has_options = options.audio or options.video
-        self.qualities_status.text = "" if has_options else "no options found"
+        self.qualities_status.text = "" if has_options else t("no_options")
         self.fill_quality_column(self.audio_column, "audio", options.audio)
         self.fill_quality_column(self.video_column, "video", options.video)
 
@@ -740,25 +797,25 @@ class DownloadityApp(App):
         usage = ""
         if size:
             usage = f"~{size}" if self.media.is_playlist else size
-            usage = f"\n\nthis will use {usage}\nof your storage"
+            usage = "\n\n" + t("storage_use", size=usage)
 
         # Single videos can be cut
         if kind == "video" and not self.media.is_playlist:
             AsciiPopup(
-                "download the full\nvideo or cut it?" + usage,
+                t("full_or_cut") + usage,
                 [
-                    ("cut video", lambda: self.ask_cut(quality)),
-                    ("full video", lambda: self.start_download(kind, quality)),
+                    (t("cut_video"), lambda: self.ask_cut(quality)),
+                    (t("full_video"), lambda: self.start_download(kind, quality)),
                 ],
             ).open()
             return
 
-        message = f"download in {quality.label}?" + usage
+        message = t("download_in", quality=quality.label) + usage
         AsciiPopup(
             message,
             [
-                ("cancel", lambda: None),
-                ("confirm", lambda: self.confirm_invalid(kind, quality)),
+                (t("cancel"), lambda: None),
+                (t("confirm"), lambda: self.confirm_invalid(kind, quality)),
             ],
         ).open()
 
@@ -769,7 +826,7 @@ class DownloadityApp(App):
 
         for name in ("start", "end"):
             row = BoxLayout(size_hint_y=None, height=dp(32))
-            label = mono_label(name, dp(15), halign="left", size_hint_x=None, width=dp(60))
+            label = mono_label(t(name), dp(15), halign="left", size_hint_x=None, width=dp(60))
             label.bind(size=label.setter("text_size"))
             row.add_widget(label)
             row.add_widget(mono_label("[", dp(15), size_hint_x=None, width=dp(12)))
@@ -792,7 +849,7 @@ class DownloadityApp(App):
             fields.append(field)
 
         if duration:
-            box.add_widget(mono_label(f"video length: {format_time(duration)}", dp(12), color=GRAY))
+            box.add_widget(mono_label(t("video_length", time=format_time(duration)), dp(12), color=GRAY))
 
         def cut_range():
             start, end = (parse_time(field.text) for field in fields)
@@ -803,10 +860,10 @@ class DownloadityApp(App):
             return start, end
 
         popup = AsciiPopup(
-            "cut the video:",
+            t("cut_the_video"),
             [
-                ("cancel", lambda: None),
-                ("download", lambda: self.start_download("video", quality, cut_range())),
+                (t("cancel"), lambda: None),
+                (t("download"), lambda: self.start_download("video", quality, cut_range())),
             ],
             body=box,
             height=dp(300),
@@ -827,9 +884,9 @@ class DownloadityApp(App):
             return
 
         AsciiPopup(
-            "these items are invalid\nand won't be downloaded:",
-            [("OK", lambda: self.start_download(kind, quality))],
-            items=[e.title or "unknown title" for e in self.media.invalid],
+            t("invalid_items"),
+            [(t("ok"), lambda: self.start_download(kind, quality))],
+            items=[e.title or t("unknown_title") for e in self.media.invalid],
         ).open()
 
     #====================DOWNLOAD======================#
@@ -952,31 +1009,31 @@ class DownloadityApp(App):
         self.draw_bar(1)
 
         if error:
-            message = f"download failed\n\n{error}"
+            message = t("download_failed", error=i18n.error(error))
         else:
             # Short path, no mid-word wrap
             shown = wrap_path(folder.replace("/storage/emulated/0/", ""))
-            message = f"download finished!\n\nyour files are in:\n{shown}"
+            message = t("download_finished", path=shown)
 
         after = lambda: self.show_failed(failed) if failed else self.reset_home()
-        buttons = [("OK", after)]
+        buttons = [(t("ok"), after)]
 
         # Single videos can go straight out
         path = self.queue.last_path
         if self.kind == "video" and not self.media.is_playlist and path and not error:
-            buttons.insert(0, ("share", lambda: self.share(path)))
+            buttons.insert(0, (t("share"), lambda: self.share(path)))
         AsciiPopup(escape_markup(message), buttons, closable=False).open()
 
     def share(self, path):
         if share_file(path):
             self.reset_home()
         else:
-            AsciiPopup("could not share\nthis file", [("OK", self.reset_home)], closable=False).open()
+            AsciiPopup(t("share_failed"), [(t("ok"), self.reset_home)], closable=False).open()
 
     def show_failed(self, failed):
         AsciiPopup(
-            f"{len(failed)} item(s) failed:",
-            [("OK", self.reset_home)],
+            t("items_failed", n=len(failed)),
+            [(t("ok"), self.reset_home)],
             items=failed,
             closable=False,
         ).open()
@@ -986,6 +1043,113 @@ class DownloadityApp(App):
         self.link_input.text = ""
         self.screens.current = "home"
 
+
+    #=====================SETTINGS=====================#
+
+    def show_settings(self, *_args):
+        popup_width = min(dp(340), Window.width - dp(24))
+        inner = popup_width - 2 * POPUP_SIDE
+        box = BoxLayout(orientation="vertical", spacing=dp(8))
+
+        # Label and choice kept together
+        language = t("language")
+        choice = escape_markup(f"[ {self.language_name(self.language_choice)} ]")
+        font = dp(15)
+        total = text_width(language, font) + dp(16) + text_width(choice, font)
+        # Long names shrink a little
+        if total > inner:
+            font *= inner / total
+        label_width, choice_width = text_width(language, font), text_width(choice, font)
+        row = BoxLayout(
+            size_hint=(None, None),
+            size=(label_width + dp(16) + choice_width, dp(44)),
+            spacing=dp(16),
+            pos_hint={"center_x": 0.5},
+        )
+        row.add_widget(mono_label(language, font, size_hint_x=None, width=label_width))
+        picker = AsciiButton(choice, border=False, font_size=font, size_hint_x=None, width=choice_width)
+        row.add_widget(picker)
+        box.add_widget(row)
+        box.add_widget(Label())
+
+        links = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(16))
+        for text, url in ((t("donate"), DONATE_URL), ("github", REPO_URL)):
+            button = AsciiButton(escape_markup(f"[ {text} ]"), border=False, font_size=dp(15), disabled=not url)
+            button.bind(on_release=lambda _b, u=url: open_url(u))
+            links.add_widget(button)
+        box.add_widget(links)
+        box.add_widget(mono_label(f"v{APP_VERSION}", dp(12), color=GRAY, size_hint_y=None, height=dp(20)))
+
+        popup = AsciiPopup(t("settings"), None, body=box, height=dp(280), width=popup_width)
+        popup.message.size_hint_y = None
+        popup.message.height = dp(30)
+        picker.bind(on_release=lambda _b: (popup.dismiss(), self.show_languages()))
+        # Tap outside closes it
+        popup.auto_dismiss = True
+        popup.open()
+
+    def show_languages(self):
+        box = BoxLayout(orientation="vertical")
+        for choice in ("auto", *i18n.LANGUAGES):
+            name = self.language_name(choice)
+            text = f"› {name} ‹" if choice == self.language_choice else name
+            button = AsciiButton(escape_markup(text), border=False, font_size=dp(15))
+            button.bind(on_release=lambda _b, c=choice: self.choose_language(c))
+            box.add_widget(button)
+
+        popup = AsciiPopup(t("language"), None, body=box, height=dp(340), width=dp(340))
+        popup.message.size_hint_y = None
+        popup.message.height = dp(30)
+        popup.auto_dismiss = True
+        popup.open()
+
+    def choose_language(self, choice):
+        for popup in [w for w in Window.children if isinstance(w, AsciiPopup)]:
+            popup.dismiss()
+        self.save_settings(language=choice)
+        self.apply_language()
+        self.rebuild()
+        self.show_settings()
+
+    # Each name in its own language
+    def language_name(self, choice):
+        if choice == "auto":
+            return f"auto ({i18n.NAMES[i18n.system_language(system_locale())]})"
+        return i18n.NAMES[choice]
+
+    @property
+    def language_choice(self):
+        choice = self.load_settings().get("language")
+        return choice if choice in i18n.LANGUAGES else "auto"
+
+    def apply_language(self):
+        choice = self.language_choice
+        i18n.set_language(i18n.system_language(system_locale()) if choice == "auto" else choice)
+
+    def settings_path(self):
+        return os.path.join(self.user_data_dir, "settings.json")
+
+    def load_settings(self):
+        try:
+            with open(self.settings_path()) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def save_settings(self, **values):
+        settings = {**self.load_settings(), **values}
+        with open(self.settings_path(), "w") as f:
+            json.dump(settings, f)
+
+    def rebuild(self):
+        # Screens rebuilt in the new language
+        if hasattr(self, "check_event"):
+            self.check_event.cancel()
+        self.show_in_result_area(None)
+        self.media = self.checked_media = None
+        self.frame.clear_widgets()
+        self.screens = self.build_screens()
+        self.frame.add_widget(self.screens)
 
     #======================BUILD=======================#
 
@@ -1022,8 +1186,8 @@ class DownloadityApp(App):
     def offer_update(self, apk):
         # Asked again on every launch
         AsciiPopup(
-            f"new version v{apk['version']}\n\nupdate now?",
-            [("yes", lambda: self.start_update(apk)), ("no", self.skip_update)],
+            t("new_version", version=apk["version"]),
+            [(t("yes"), lambda: self.start_update(apk)), (t("no"), self.skip_update)],
             closable=False,
         ).open()
 
@@ -1036,8 +1200,8 @@ class DownloadityApp(App):
 
     def ask_install_permission(self, apk):
         AsciiPopup(
-            "to update, allow your\nphone to install apps\nfrom this source\n\nthen come back here",
-            [("settings", lambda: self.open_settings(apk)), ("later", self.skip_update)],
+            t("allow_install"),
+            [(t("open_settings"), lambda: self.open_settings(apk)), (t("later"), self.skip_update)],
             height=dp(260),
             closable=False,
         ).open()
@@ -1079,7 +1243,7 @@ class DownloadityApp(App):
 
     def update_app(self, apk):
         self.updating = True
-        title = mono_label(f"downloading v{apk['version']}", dp(15), size_hint_y=None, height=dp(24))
+        title = mono_label(t("downloading_version", version=apk["version"]), dp(15), size_hint_y=None, height=dp(24))
         bar = mono_label("", LINE_FONT, markup=True, size_hint_y=None, height=dp(20))
         percent = mono_label("0%", dp(13), color=GRAY, size_hint_y=None, height=dp(20))
         body = BoxLayout(orientation="vertical")
@@ -1105,7 +1269,7 @@ class DownloadityApp(App):
         def failed():
             self.updating = False
             popup.dismiss()
-            AsciiPopup("update failed\n\ntry again later", [("OK", self.skip_update)], closable=False).open()
+            AsciiPopup(t("update_failed"), [(t("ok"), self.skip_update)], closable=False).open()
 
         def work():
             try:
@@ -1140,10 +1304,35 @@ class DownloadityApp(App):
 
     def build(self):
         Window.bind(on_keyboard=self.on_back)
-        self.screens = ScreenManager(transition=NoTransition())
+        self.apply_language()
+        self.screens = self.build_screens()
+
+        # Keeps clear of system bars
+        self.frame = BoxLayout()
+        self.frame.add_widget(self.screens)
+        if platform == "android":
+            clear_system_bars()
+            Clock.schedule_once(self.fit_system_bars, 0.5)
+        return self.frame
+
+    def build_screens(self):
+        screens = ScreenManager(transition=NoTransition())
+        self.screens = screens
 
         home = Screen(name="home")
         home.add_widget(self.build_home())
+        # Floats, home layout stays put
+        settings = AsciiButton(
+            "⚙",
+            border=False,
+            font_size=dp(48),
+            size_hint=(None, None),
+            size=(dp(64), dp(64)),
+        )
+        # Slightly off the corner
+        home.bind(size=lambda screen, size: setattr(settings, "pos", (size[0] - dp(72), size[1] - dp(72))))
+        settings.bind(on_release=self.show_settings)
+        home.add_widget(settings)
         self.screens.add_widget(home)
 
         qualities = Screen(name="qualities")
@@ -1153,14 +1342,7 @@ class DownloadityApp(App):
         downloading = Screen(name="downloading")
         downloading.add_widget(self.build_downloading())
         self.screens.add_widget(downloading)
-
-        # Keeps clear of system bars
-        self.frame = BoxLayout()
-        self.frame.add_widget(self.screens)
-        if platform == "android":
-            clear_system_bars()
-            Clock.schedule_once(self.fit_system_bars, 0.5)
-        return self.frame
+        return screens
 
     def fit_system_bars(self, dt):
         insets = activity.getWindow().getDecorView().getRootWindowInsets()
@@ -1202,8 +1384,8 @@ class DownloadityApp(App):
         root.add_widget(Label(size_hint_y=None, height=dp(110)))
 
         # "paste the link:"
-        link_label = Label(
-            text="paste the link:",
+        link_label = TextLabel(
+            text=t("paste_link"),
             color=(1, 1, 1, 1),
             halign="left",
             valign="middle",
@@ -1328,7 +1510,7 @@ class DownloadityApp(App):
         )
 
         self.download_button = AsciiButton(
-            "DOWNLOAD",
+            t("download_button"),
             size_hint=(None, None),
             width=dp(210),
             pos_hint={"center_x": 0.5},
@@ -1397,9 +1579,9 @@ class DownloadityApp(App):
         )
 
         header = BoxLayout(size_hint_y=None, height=lh * 5)
-        header.add_widget(mono_label("♪ AUDIO", dp(24)))
+        header.add_widget(mono_label(t("audio_header"), dp(24)))
         header.add_widget(line_gap())
-        header.add_widget(mono_label("▶ VIDEO", dp(24)))
+        header.add_widget(mono_label(t("video_header"), dp(24)))
         table.add_widget(header)
 
         divider = Widget(size_hint_y=None, height=lh)
