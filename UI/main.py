@@ -1057,9 +1057,10 @@ class DownloadityApp(App):
     def show_settings(self, *_args):
         popup_width = min(dp(340), Window.width - dp(24))
         inner = popup_width - 2 * POPUP_SIDE
-        box = BoxLayout(orientation="vertical", spacing=dp(8))
-        # Space below the title
-        box.add_widget(Widget(size_hint_y=None, height=dp(14)))
+        # Top pad offsets the title's spacing
+        box = BoxLayout(orientation="vertical", spacing=dp(8), padding=[0, dp(7.5), 0, 0])
+        # Equal gaps center the language row
+        box.add_widget(Widget())
 
         # Label and choice kept together
         language = t("language")
@@ -1080,7 +1081,7 @@ class DownloadityApp(App):
         picker = AsciiButton(choice, border=False, font_size=font, size_hint_x=None, width=choice_width)
         row.add_widget(picker)
         box.add_widget(row)
-        box.add_widget(Label())
+        box.add_widget(Widget())
 
         links = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(16))
         # Donate appears once URL exists
@@ -1090,10 +1091,13 @@ class DownloadityApp(App):
             button = AsciiButton(escape_markup(f"[ {text} ]"), border=False, font_size=dp(15))
             button.url = url
             links.add_widget(button)
-        box.add_widget(links)
-        box.add_widget(mono_label(f"v{APP_VERSION}", dp(12), color=GRAY, size_hint_y=None, height=dp(20)))
+        # Github sits close to version
+        footer = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(66), spacing=dp(2))
+        footer.add_widget(links)
+        footer.add_widget(mono_label(f"v{APP_VERSION}", dp(12), color=GRAY, size_hint_y=None, height=dp(20)))
+        box.add_widget(footer)
 
-        popup = AsciiPopup(t("settings"), None, body=box, height=dp(240), width=popup_width)
+        popup = AsciiPopup(t("settings"), None, body=box, height=dp(270), width=popup_width)
         popup.message.size_hint_y = None
         popup.message.height = dp(30)
         picker.bind(on_release=lambda _b: (popup.dismiss(), self.show_languages()))
