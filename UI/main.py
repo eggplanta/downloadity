@@ -747,7 +747,7 @@ class DownloadityApp(App):
             t("downloaded_before", count=count),
             [
                 (t("all"), self.repeat_all),
-                (t("only_new"), lambda: self.repeat_new(new)),
+                (t("new"), lambda: self.repeat_new(new)),
             ],
         )
         popup.buttons[1].disabled = not new

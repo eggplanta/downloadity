@@ -33,20 +33,20 @@ STRINGS = {
 
     # Known playlist
     "downloaded_before": {
-        "en": "this playlist was\ndownloaded before:\n\n{count}",
-        "pt": "esta playlist já\nfoi baixada antes:\n\n{count}",
-        "es": "esta lista ya se\ndescargó antes:\n\n{count}",
-        "zh": "這個播放清單\n之前已經下載過：\n\n{count}",
+        "en": "this playlist was\ndownloaded before\n({count})\n\ndownload:",
+        "pt": "esta playlist já\nfoi baixada antes\n({count})\n\nbaixar:",
+        "es": "esta lista ya se\ndescargó antes\n({count})\n\ndescargar:",
+        "zh": "這個播放清單\n之前已經下載過\n（{count}）\n\n下載：",
     },
     "new_items": {
-        "en": ("{n} new item(s)", "{n} new item(s)"),
+        "en": ("{n} new item", "{n} new items"),
         "pt": ("{n} item novo", "{n} itens novos"),
         "es": ("{n} elemento nuevo", "{n} elementos nuevos"),
         "zh": ("{n} 個新項目", "{n} 個新項目"),
     },
     "no_new_items": {"en": "no new items", "pt": "nenhum item novo", "es": "ningún elemento nuevo", "zh": "沒有新項目"},
     "all": {"en": "all", "pt": "todos", "es": "todos", "zh": "全部"},
-    "only_new": {"en": "only new", "pt": "só novos", "es": "solo nuevos", "zh": "只要新的"},
+    "new": {"en": "new", "pt": "novos", "es": "nuevos", "zh": "新項目"},
 
     # Download questions
     "storage_use": {
