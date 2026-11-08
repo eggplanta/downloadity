@@ -41,7 +41,7 @@ The files go straight to your phone, with cover art and tags, and there are **no
 
 3. Open the downloaded file. If Android says it can't install apps from this source, tap **Settings**, turn on **Allow from this source** and go back
 
-4. Tap **Install**. If Google Play Protect warns you, tap **Install anyway**. The app isn't on the Play Store, so this warning is expected
+4. Tap **Install**. If Google Play Protect blocks it, tap **More details** and then **Install anyway**. The app isn't on the Play Store, so this warning is expected
 
 5. Open **downloadity** and allow notifications. They show the progress of playlist downloads
 

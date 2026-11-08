@@ -1,6 +1,6 @@
 """
 Drives the app: link -> quality -> confirm -> download -> OK
-Usage: ui_download.py url audio|video kbps|height [shots name] [start end]
+Usage: ui_download.py url audio|video m4a|opus|mp3|height [shots name] [start end]
 Start and end (min:sec) cut a single video
 REPEAT=all|new answers the known playlist popup
 Shots and files go to tests/output, per shots name
@@ -18,15 +18,21 @@ from kivy.graphics import Color, Rectangle
 from kivy.uix.textinput import TextInput
 
 import main
+from main import t
 from downloadity.formats import VIDEO_MARGIN, VideoQuality, pick_quality
 
-URL, KIND, VALUE = sys.argv[1], sys.argv[2], int(sys.argv[3])
+URL, KIND, VALUE = sys.argv[1], sys.argv[2], sys.argv[3]
+# Audio is picked by codec
+VALUE = int(VALUE) if VALUE.isdigit() else VALUE
 NAME = sys.argv[4] if len(sys.argv) > 4 else "single"
 CUT = sys.argv[5:7] if len(sys.argv) > 6 else None
 REPEAT = os.environ.get("REPEAT", "new")
 SHOTS = paths.OUTPUT / "shots" / NAME
 SHOTS.mkdir(parents=True, exist_ok=True)
 main.DOWNLOAD_ROOT = str(paths.OUTPUT / "downloadity" / NAME)
+# English, and the real settings untouched
+main.DownloadityApp.load_settings = lambda self: {"language": "en"}
+main.DownloadityApp.save_settings = lambda self, **values: None
 
 app = main.DownloadityApp()
 state = {"item": None, "shot": set(), "t0": 0.0, "arts": [], "marks": set()}
@@ -91,9 +97,13 @@ def wait_valid(dt):
 def repeat(dt):
     p = popup()
     if p:
-        log(f"repeat popup: {popup_text(p)[0]!r} only new disabled={p.buttons[1].disabled}")
+        log(f"repeat popup: {popup_text(p)[0]!r} new disabled={p.buttons[1].disabled}")
         p.export_to_png(str(SHOTS / "popup_repeat.png"))
-        press(p, "only new" if REPEAT == "new" else "all")
+        # Nothing new, nothing to download
+        if REPEAT == "new" and p.buttons[1].disabled:
+            log("no new items, stopping")
+            return app.stop()
+        press(p, t("new") if REPEAT == "new" else t("all"))
     Clock.schedule_once(choose_quality, 0.5)
 
 
@@ -112,13 +122,13 @@ def confirm(dt):
     log(f"confirm: {text!r}")
 
     # Single videos ask full or cut
-    if not text.startswith("full video?"):
-        press(p, "confirm")
+    if not text.startswith(t("full_or_cut")):
+        press(p, t("confirm"))
     elif CUT:
-        press(p, "no, cut")
+        press(p, t("cut_video"))
         return Clock.schedule_once(fill_cut, 0.5)
     else:
-        press(p, "yes")
+        press(p, t("full_video"))
     Clock.schedule_once(skip_invalid, 0.5)
 
 
@@ -130,7 +140,7 @@ def fill_cut(dt):
         field.text = value
     log(f"cut {CUT}: disabled={button.disabled}")
     Clock.schedule_once(lambda dt: p.export_to_png(str(SHOTS / "popup_cut.png")), 0.2)
-    Clock.schedule_once(lambda dt: press(p, "download"), 0.4)
+    Clock.schedule_once(lambda dt: press(p, t("download")), 0.4)
     Clock.schedule_once(wait_done, 1.4)
 
 
@@ -138,17 +148,18 @@ def skip_invalid(dt):
     p = popup()
     if p:
         log(f"invalid popup: {popup_text(p)}")
-        press(p, "OK")
+        press(p, t("ok"))
     Clock.schedule_once(wait_done, 1)
 
 
 def wait_done(dt):
     p = popup()
-    if not p:
+    # Cut popup may still be closing
+    if not p or popup_text(p)[0] == t("cut_the_video"):
         return Clock.schedule_once(wait_done, 0.5)
 
     log(f"final: {popup_text(p)}")
-    press(p, "OK")
+    press(p, t("ok"))
     Clock.schedule_once(finish, 0.5)
 
 
@@ -156,7 +167,7 @@ def finish(dt):
     p = popup()
     if p:
         log(f"failed popup: {popup_text(p)}")
-        press(p, "OK")
+        press(p, t("ok"))
         return Clock.schedule_once(finish, 0.5)
 
     folder = state.get("folder")

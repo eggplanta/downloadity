@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "downloadity"
-version = "1.0.0"
+version = "1.0.5"
 description = "A minimalist mobile app to download music and videos from anywhere (including Spotify)"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"

@@ -8,8 +8,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Optional
 
+import yt_dlp
+
 from .covers import cover_image, embed_tags
 from .downloader import cut_video, download_audio, download_video
+from .extractor import SilentLogger
 from . import library
 from .extractor import VIDEO_LONG_SIDES
 from .formats import build_quality_options, pick_quality
@@ -24,6 +27,10 @@ CUT_COST = 0.005
 CONVERT_RATE = 0.017
 DEFAULT_DURATION = 180
 TICK = 0.1
+# Video may end in any of these
+VIDEO_EXTS = ("mp4", "webm", "mkv")
+# Leaves room for name suffixes
+NAME_BYTES = 180
 
 
 @dataclass
@@ -128,17 +135,19 @@ class DownloadQueue:
                         self.listener.on_item_start(item)
                         shown_at = time.monotonic()
 
+                    # Read now, the download clears info
+                    measure = self._measure(entry)
                     # Starts before its pair is ready
                     report = _LateReport(None if batch else self.listener)
                     future = download_pool.submit(self._download, entry, report)
                     downloads[future] = (len(batch), index, failed_title(entry, video), report)
-                    batch.append((index, entry, item))
+                    batch.append((index, measure, item))
 
                 if not batch:
                     continue
 
                 items = [item for _, _, item in batch]
-                weights = self._weights([entry for _, entry, _ in batch])
+                weights = self._weights([measure for _, measure, _ in batch])
                 display = _PairDisplay(self.listener, items, weights, shown_at)
                 for k, _, _, report in downloads.values():
                     report.attach(display.report(k))
@@ -187,19 +196,24 @@ class DownloadQueue:
     def _expected_size(self, quality) -> Optional[int]:
         return quality.filesize if self.kind == "audio" else quality.total_filesize
 
-    def _weights(self, entries: list[MediaEntry]) -> list[float]:
+    def _measure(self, entry: MediaEntry) -> tuple:
+        # Expected size and duration
+        quality = self._quality(entry)
+        return quality and self._expected_size(quality), entry.info.get("duration")
+
+    @staticmethod
+    def _weights(measures: list[tuple]) -> list[float]:
         """
         Sizes if all known, else durations
         """
-        qualities = [self._quality(entry) for entry in entries]
-        sizes = [quality and self._expected_size(quality) for quality in qualities]
+        sizes = [size for size, _ in measures]
         if all(sizes):
             return sizes
 
-        durations = [entry.info.get("duration") for entry in entries]
+        durations = [duration for _, duration in measures]
         if all(durations):
             return durations
-        return [1] * len(entries)
+        return [1] * len(measures)
 
     def _download(self, entry: MediaEntry, report) -> dict:
         quality = self._quality(entry)
@@ -226,6 +240,10 @@ class DownloadQueue:
             options["filename"] = safe_name(f"{caption} [{info.get('id')}]")
         elif self.kind == "audio":
             options["filename"] = safe_name(song_name(entry))
+        if not self.cut:
+            name = options.get("filename") or safe_name(template_name(info))
+            exts = (quality.codec,) if self.kind == "audio" else VIDEO_EXTS
+            options["filename"] = free_name(self.output_dir, name, exts)
 
         # Cuts download the full video first
         if self.cut:
@@ -319,7 +337,8 @@ class DownloadQueue:
             return {"success": False}
 
         start, end = self.cut
-        output = os.path.join(self.output_dir, f"{base} [{cut_label(start)}-{cut_label(end)}].mp4")
+        name = free_name(self.output_dir, f"{base} [{cut_label(start)}-{cut_label(end)}]", ("mp4",))
+        output = os.path.join(self.output_dir, f"{name}.mp4")
         success = cut_video(found[0], start, end, output, on_cut)
         os.remove(found[0])
         return {"success": success, "path": output}
@@ -538,7 +557,14 @@ def song_name(entry: MediaEntry) -> str:
     "Artist - Title" for music files
     """
     title, artist = display_names(entry)
-    return f"{artist} - {title}" if artist and title else title or artist or "audio"
+    if not (artist and title):
+        return title or artist or "audio"
+
+    # Long credits drop trailing artists
+    artists = artist.split(", ")
+    while len(artists) > 1 and len(f"{', '.join(artists)} - {title}".encode()) > NAME_BYTES:
+        artists.pop()
+    return f"{', '.join(artists)} - {title}"
 
 
 def display_names(entry: MediaEntry, video: bool = False) -> tuple[str, str]:
@@ -573,6 +599,48 @@ def cut_label(seconds: float) -> str:
     return f"{hours}.{minutes:02d}.{secs:02d}" if hours else f"{minutes}.{secs:02d}"
 
 
+def template_name(info: dict) -> str:
+    # Same name yt-dlp would pick
+    with yt_dlp.YoutubeDL({"outtmpl": "%(title)s", "logger": SilentLogger()}) as ydl:
+        return ydl.prepare_filename(info)
+
+
+def free_name(folder: str, name: str, exts: tuple) -> str:
+    """
+    Files from a previous install
+    can't be overwritten, so pick another name
+    """
+    candidate = name
+    for number in range(2, 100):
+        if all(_usable(os.path.join(folder, f"{candidate}.{ext}")) for ext in exts):
+            if candidate != name:
+                print("name taken, saving as", candidate, flush=True)
+            return candidate
+        candidate = f"{name} ({number})"
+    return name
+
+
+def _usable(path: str) -> bool:
+    # Ours to overwrite, or free
+    if os.path.exists(path):
+        try:
+            open(path, "r+b").close()
+        except OSError:
+            return False
+        return True
+    # Missing folders are made later
+    if not os.path.isdir(os.path.dirname(path)):
+        return True
+    try:
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+    except OSError:
+        return False
+    os.remove(path)
+    return True
+
+
 def safe_name(name: str) -> str:
     name = re.sub(r'[\\/:*?"<>|]', "_", name).strip(" .")
+    # Names are capped at 255 bytes
+    name = name.encode()[:NAME_BYTES].decode(errors="ignore").strip(" .")
     return name or "playlist"

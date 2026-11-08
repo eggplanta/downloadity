@@ -9,16 +9,16 @@ import time
 import paths
 
 PLAYLISTS = [
-    ("https://www.youtube.com/playlist?list=PLpY7hx7jry7yO2su3JjgsaPdp2-bZGPth", "audio", 48),
-    ("https://www.youtube.com/playlist?list=PLXaRb6luN8VJJJlotgmqxsdny5sABG0Km", "audio", 48),
+    ("https://www.youtube.com/playlist?list=PLpY7hx7jry7yO2su3JjgsaPdp2-bZGPth", "audio", "m4a"),
+    ("https://www.youtube.com/playlist?list=PLXaRb6luN8VJJJlotgmqxsdny5sABG0Km", "audio", "m4a"),
     ("https://www.youtube.com/playlist?list=PLf-4hVC2QHho", "video", 144),
-    ("https://www.youtube.com/playlist?list=PLy0tzzdIA_JBPQre0idTQwyxb4sUZJgj5", "audio", 48),
-    ("https://www.youtube.com/playlist?list=PLfiMjLyNWxeZl828zfvlnymKB2c9o3cKp", "audio", 48),
-    ("https://open.spotify.com/playlist/00WazrS70WN7Mx3OtsB61s", "audio", 48),
-    ("https://open.spotify.com/playlist/7fyuMn8ZZh8N3FoJnaP7jo", "audio", 48),
-    ("https://open.spotify.com/playlist/6HSu6LcLZ955Rm8KzbHaMB", "audio", 48),
-    ("https://open.spotify.com/playlist/5L9PJwHWclFverWwxsnpbS", "audio", 48),
-    ("https://open.spotify.com/playlist/1S0YQMmTc4Q1ffRV6zoP7y", "audio", 48),
+    ("https://www.youtube.com/playlist?list=PLy0tzzdIA_JBPQre0idTQwyxb4sUZJgj5", "audio", "m4a"),
+    ("https://www.youtube.com/playlist?list=PLfiMjLyNWxeZl828zfvlnymKB2c9o3cKp", "audio", "m4a"),
+    ("https://open.spotify.com/playlist/00WazrS70WN7Mx3OtsB61s", "audio", "m4a"),
+    ("https://open.spotify.com/playlist/7fyuMn8ZZh8N3FoJnaP7jo", "audio", "m4a"),
+    ("https://open.spotify.com/playlist/6HSu6LcLZ955Rm8KzbHaMB", "audio", "m4a"),
+    ("https://open.spotify.com/playlist/5L9PJwHWclFverWwxsnpbS", "audio", "m4a"),
+    ("https://open.spotify.com/playlist/1S0YQMmTc4Q1ffRV6zoP7y", "audio", "m4a"),
 ]
 
 logs = paths.OUTPUT / "logs"

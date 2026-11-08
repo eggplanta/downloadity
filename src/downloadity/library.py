@@ -77,7 +77,11 @@ def record(folder: str, kind: str, item_id: Optional[str], path: str, playlist_i
         data = _read(folder) or {"playlist_id": playlist_id, "source": source, "items": {}}
         data["items"].setdefault(kind, {})[item_id] = os.path.basename(path)
         data["last_kind"] = kind
-        _write(folder, data)
+        try:
+            _write(folder, data)
+        except OSError as e:
+            # A past install may own it
+            print("library write failed:", e, flush=True)
 
 
 # Internal helpers

@@ -1,6 +1,6 @@
 """
 Downloads a link from the terminal, like the app
-Usage: test_general.py [url] [audio|video] [kbps|height]
+Usage: test_general.py [url] [audio|video] [m4a|opus|mp3|height]
 Files go to tests/output/downloadity
 """
 import sys
@@ -24,7 +24,9 @@ for kind in ("audio", "video"):
     print(f"{kind}: {', '.join(labels) or '-'}")
 
 kind = args[1] if len(args) > 1 else input("\naudio or video? ")
-value = int(args[2] if len(args) > 2 else input("kbps or height: "))
+value = args[2] if len(args) > 2 else input("codec or height: ")
+# Audio is picked by codec
+value = int(value) if value.isdigit() else value
 
 
 class Printer:

@@ -14,6 +14,7 @@ from spotify_scraper import SpotifyClient
 from spotify_scraper.http.retry import RetryPolicy
 from spotify_scraper.models import Track as SpotifyTrackData
 
+from .extractor import SilentLogger
 from .throttle import MAX_ATTEMPTS, throttle
 
 
@@ -31,6 +32,8 @@ _CANDIDATES_PER_QUERY = 5
 _YDL_SEARCH_OPTS = {
     "quiet": True,
     "no_warnings": True,
+    # Android stderr can't take writes
+    "logger": SilentLogger(),
     "extract_flat": "in_playlist",
     "skip_download": True,
     # Homepage fetch doubles the requests

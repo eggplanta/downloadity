@@ -12,7 +12,7 @@ from kivy.app import App
 from kivy.core.window import Window
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
-from kivy.metrics import dp
+from kivy.metrics import Metrics, dp
 from kivy.uix.textinput import TextInput
 from kivy.core.text import Label as CoreLabel, LabelBase
 from kivy.clock import Clock
@@ -36,6 +36,14 @@ from i18n import t
 Window.clearcolor = (0, 0, 0, 1)
 # Focused field stays above keyboard
 Window.softinput_mode = "below_target"
+
+# Narrow screens shrink everything
+MIN_WIDTH_DP = 360
+# Android fills metrics on dpi read
+Metrics.dpi
+density = Metrics.get_density(force_recompute=True)
+if Window.width and density and Window.width / density < MIN_WIDTH_DP:
+    Metrics.density = Window.width / MIN_WIDTH_DP
 
 # Bundled, Android has no DejaVu
 FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
@@ -1027,12 +1035,17 @@ class DownloadityApp(App):
 
         if error:
             message = t("download_failed", error=i18n.error(error))
+        elif failed and not done:
+            # Nothing saved isn't a success
+            message = t("download_failed", error="").strip()
         else:
             # Short path, no mid-word wrap
             shown = wrap_path(folder.replace("/storage/emulated/0/", ""))
             message = t("download_finished", path=shown)
 
-        after = lambda: self.show_failed(failed) if failed else self.reset_home()
+        # One item needs no list
+        listed = failed and (done or len(failed) > 1)
+        after = lambda: self.show_failed(failed) if listed else self.reset_home()
         buttons = [(t("ok"), after)]
 
         # Single videos can go straight out

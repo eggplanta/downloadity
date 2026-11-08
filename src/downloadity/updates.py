@@ -6,6 +6,7 @@ Broken ones roll back to the previous
 import compileall
 import hashlib
 import importlib
+import importlib.metadata
 import json
 import os
 import re
@@ -51,7 +52,7 @@ def activate(root: str, app_version: str) -> None:
 
     # New APKs may bundle newer libraries
     if state.get("app_version") != app_version:
-        state["bundled"] = {name: _bundled_version(module) for name, module in LIBS.items()}
+        state["bundled"] = {name: _bundled_version(name, module) for name, module in LIBS.items()}
         state["app_version"] = app_version
 
     for name, module in LIBS.items():
@@ -241,7 +242,12 @@ def _check_lib(name: str) -> None:
     print(f"update: {name} {version} ready for next launch", flush=True)
 
 
-def _bundled_version(module: str) -> Optional[str]:
+def _bundled_version(name: str, module: str) -> Optional[str]:
+    # Importing twice breaks yt-dlp patches
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        pass
     try:
         version = _version(importlib.import_module(module))
     except Exception:
