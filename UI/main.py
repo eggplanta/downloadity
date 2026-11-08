@@ -530,6 +530,10 @@ class AsciiButton(Button):
 class AsciiPopup(ModalView):
     def __init__(self, message, buttons, items=None, body=None, height=None, width=dp(320), closable=True, **kwargs):
         self.closable = closable
+        widths = [text_width(f"[ {label} ]", dp(15)) for label, _ in buttons or ()]
+        if widths:
+            # Widens so long buttons breathe
+            width = max(width, sum(widths) + dp(24) * len(widths) + 2 * POPUP_SIDE)
         super().__init__(
             size_hint=(None, None),
             size=(min(width, Window.width - dp(24)), height or (dp(420) if items else dp(230))),
@@ -576,8 +580,13 @@ class AsciiPopup(ModalView):
         self.buttons = []
         if buttons:
             row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(16))
-            for label, callback in buttons:
+            share = (self.width - 2 * POPUP_SIDE - dp(16) * (len(widths) - 1)) / len(widths)
+            # Long labels get more room
+            proportional = max(widths) > share
+            for (label, callback), width in zip(buttons, widths):
                 button = AsciiButton(escape_markup(f"[ {label} ]"), border=False, font_size=dp(15))
+                if proportional:
+                    button.size_hint_x = width
                 button.bind(on_release=lambda _b, cb=callback: self.choose(cb))
                 row.add_widget(button)
                 self.buttons.append(button)
@@ -1345,7 +1354,7 @@ class DownloadityApp(App):
         settings = AsciiButton(
             "⚙",
             border=False,
-            font_size=dp(48),
+            font_size=dp(34),
             size_hint=(None, None),
             size=(dp(64), dp(64)),
         )

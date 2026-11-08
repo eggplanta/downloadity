@@ -15,7 +15,7 @@ NAMES = {
 
 STRINGS = {
     # Home
-    "checking": {"en": "checking", "pt": "verificando", "es": "comprobando", "zh": "檢查中"},
+    "checking": {"en": "checking", "pt": "verificando", "es": "verificando", "zh": "檢查中"},
     "paste_link": {"en": "paste the link:", "pt": "cole o link:", "es": "pega el link:", "zh": "貼上連結："},
     "download_button": {"en": "DOWNLOAD", "pt": "BAIXAR", "es": "DESCARGAR", "zh": "下載"},
     "blocked": {
@@ -35,7 +35,7 @@ STRINGS = {
     "downloaded_before": {
         "en": "this playlist was\ndownloaded before\n({count})\n\ndownload:",
         "pt": "esta playlist já\nfoi baixada antes\n({count})\n\nbaixar:",
-        "es": "esta lista ya se\ndescargó antes\n({count})\n\ndescargar:",
+        "es": "esta playlist ya se\ndescargó antes\n({count})\n\ndescargar:",
         "zh": "這個播放清單\n之前已經下載過\n（{count}）\n\n下載：",
     },
     "new_items": {
@@ -132,8 +132,8 @@ STRINGS = {
         "es": "para actualizar, permite\nque el teléfono instale\napps de esta fuente\n\nluego vuelve aquí",
         "zh": "若要更新，請允許\n手機安裝來自\n此來源的應用程式\n\n然後回到這裡",
     },
-    "open_settings": {"en": "settings", "pt": "ajustes", "es": "ajustes", "zh": "設定"},
-    "later": {"en": "later", "pt": "depois", "es": "luego", "zh": "稍後"},
+    "open_settings": {"en": "settings", "pt": "configurações", "es": "ajustes", "zh": "設定"},
+    "later": {"en": "later", "pt": "depois", "es": "ahora no", "zh": "稍後"},
     "downloading_version": {"en": "downloading v{version}", "pt": "baixando v{version}", "es": "descargando v{version}", "zh": "正在下載 v{version}"},
     "update_failed": {
         "en": "update failed\n\ntry again later",
@@ -150,12 +150,12 @@ ERRORS = {
     "this video is private": {"pt": "este vídeo é privado", "es": "este video es privado", "zh": "這是私人影片"},
     "playlist is private or doesn't exist": {
         "pt": "a playlist é privada ou não existe",
-        "es": "la lista es privada o no existe",
+        "es": "la playlist es privada o no existe",
         "zh": "播放清單為私人或不存在",
     },
     "age-restricted, needs a login": {
         "pt": "restrito por idade, precisa de login",
-        "es": "restringido por edad, requiere iniciar sesión",
+        "es": "restringido por edad, requiere login",
         "zh": "有年齡限制，需要登入",
     },
     "members-only content": {"pt": "conteúdo só para membros", "es": "contenido solo para miembros", "zh": "僅限會員的內容"},
@@ -168,7 +168,7 @@ ERRORS = {
     "connection timed out": {"pt": "a conexão expirou", "es": "se agotó el tiempo de conexión", "zh": "連線逾時"},
     "no match found on YouTube": {"pt": "nada encontrado no YouTube", "es": "no se encontró en YouTube", "zh": "在 YouTube 上找不到相符項目"},
     "couldn't read this link": {"pt": "não foi possível ler este link", "es": "no se pudo leer este link", "zh": "無法讀取此連結"},
-    "this playlist is empty": {"pt": "esta playlist está vazia", "es": "esta lista está vacía", "zh": "這個播放清單是空的"},
+    "this playlist is empty": {"pt": "esta playlist está vazia", "es": "esta playlist está vacía", "zh": "這個播放清單是空的"},
     "no playable items found": {
         "pt": "nenhum item disponível encontrado",
         "es": "no se encontraron elementos disponibles",
@@ -181,7 +181,7 @@ ERRORS = {
     },
     "spotify: only tracks, albums\nand playlists": {
         "pt": "spotify: só músicas, álbuns\ne playlists",
-        "es": "spotify: solo canciones, álbumes\ny listas",
+        "es": "spotify: solo canciones, álbumes\ny playlists",
         "zh": "spotify：僅支援歌曲、\n專輯和播放清單",
     },
     "spotify: couldn't read this link": {
