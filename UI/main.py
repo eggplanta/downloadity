@@ -767,25 +767,33 @@ class DownloadityApp(App):
 
         has_options = options.audio or options.video
         self.qualities_status.text = "" if has_options else t("no_options")
-        self.fill_quality_column(self.audio_column, "audio", options.audio)
-        self.fill_quality_column(self.video_column, "video", options.video)
+        scale = self.quality_scale(options.audio + options.video)
+        self.fill_quality_column(self.audio_column, "audio", options.audio, scale)
+        self.fill_quality_column(self.video_column, "video", options.video, scale)
 
         self.screens.current = "qualities"
 
-    def fill_quality_column(self, column, kind, qualities):
+    def quality_scale(self, qualities):
+        # Long labels shrink to fit
+        table = (Window.width - dp(40)) * 0.9
+        column = (table - char_width("│", LINE_FONT)) / 2 - dp(8)
+        widest = max((text_width(f"[ {q.label} ]", dp(17)) for q in qualities), default=0)
+        return min(1, column / widest) if widest else 1
+
+    def fill_quality_column(self, column, kind, qualities, scale=1):
         column.clear_widgets()
 
         for quality in sorted(qualities, key=lambda q: q.value, reverse=True):
             text = escape_markup(f"[ {quality.label} ]")
             if quality.filesize_label:
-                text += f"\n[size={int(dp(13))}]({quality.filesize_label})[/size]"
+                text += f"\n[size={int(dp(13) * scale)}]({quality.filesize_label})[/size]"
 
             button = AsciiButton(
                 text,
                 border=False,
                 size_hint_y=None,
                 height=dp(52),
-                font_size=dp(17),
+                font_size=dp(17) * scale,
             )
             button.bind(
                 on_release=lambda _b, q=quality: self.on_quality_select(kind, q)
@@ -810,7 +818,7 @@ class DownloadityApp(App):
             ).open()
             return
 
-        message = t("download_in", quality=quality.label) + usage
+        message = t("download_in", quality=quality.label.replace(" ", "\u00a0")) + usage
         AsciiPopup(
             message,
             [
@@ -1050,6 +1058,8 @@ class DownloadityApp(App):
         popup_width = min(dp(340), Window.width - dp(24))
         inner = popup_width - 2 * POPUP_SIDE
         box = BoxLayout(orientation="vertical", spacing=dp(8))
+        # Space below the title
+        box.add_widget(Widget(size_hint_y=None, height=dp(14)))
 
         # Label and choice kept together
         language = t("language")
@@ -1073,17 +1083,23 @@ class DownloadityApp(App):
         box.add_widget(Label())
 
         links = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(16))
+        # Donate appears once URL exists
         for text, url in ((t("donate"), DONATE_URL), ("github", REPO_URL)):
-            button = AsciiButton(escape_markup(f"[ {text} ]"), border=False, font_size=dp(15), disabled=not url)
-            button.bind(on_release=lambda _b, u=url: open_url(u))
+            if not url:
+                continue
+            button = AsciiButton(escape_markup(f"[ {text} ]"), border=False, font_size=dp(15))
+            button.url = url
             links.add_widget(button)
         box.add_widget(links)
         box.add_widget(mono_label(f"v{APP_VERSION}", dp(12), color=GRAY, size_hint_y=None, height=dp(20)))
 
-        popup = AsciiPopup(t("settings"), None, body=box, height=dp(280), width=popup_width)
+        popup = AsciiPopup(t("settings"), None, body=box, height=dp(240), width=popup_width)
         popup.message.size_hint_y = None
         popup.message.height = dp(30)
         picker.bind(on_release=lambda _b: (popup.dismiss(), self.show_languages()))
+        # Closed so it isn't stale
+        for button in links.children:
+            button.bind(on_release=lambda b: (popup.dismiss(), open_url(b.url)))
         # Tap outside closes it
         popup.auto_dismiss = True
         popup.open()

@@ -258,7 +258,8 @@ def _human_filesize(num_bytes: Optional[int]) -> Optional[str]:
 
     size = float(num_bytes)
     for unit in ("B", "KB", "MB", "GB"):
-        if size < 1024:
+        # Avoids labels like 1001.4 MB
+        if size < 1000:
             return f"{size:.1f} {unit}"
         size /= 1024
 

@@ -64,6 +64,7 @@ Downloaded files are saved in `Download/downloadity` by default
 - **ASCII player:** while downloading, the cover is drawn in colored ASCII art on a music player screen
 - **Background downloads:** downloads keep going when you leave the app, with progress in the notification
 - **Share:** send a downloaded video straight to another app
+- **Languages:** English, Portuguese, Spanish and Traditional Chinese
 - **Auto updates:** new versions are offered and installed from inside the app, you don't need to do anything!
 
 ## Limits

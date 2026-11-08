@@ -16,7 +16,7 @@ NAMES = {
 STRINGS = {
     # Home
     "checking": {"en": "checking", "pt": "verificando", "es": "comprobando", "zh": "檢查中"},
-    "paste_link": {"en": "paste the link:", "pt": "cole o link:", "es": "pega el enlace:", "zh": "貼上連結："},
+    "paste_link": {"en": "paste the link:", "pt": "cole o link:", "es": "pega el link:", "zh": "貼上連結："},
     "download_button": {"en": "DOWNLOAD", "pt": "BAIXAR", "es": "DESCARGAR", "zh": "下載"},
     "blocked": {
         "en": "YouTube is blocking this network\ntry again later or use mobile data",
@@ -145,7 +145,7 @@ STRINGS = {
 
 # Library errors, English text -> translations
 ERRORS = {
-    "this is not a link": {"pt": "isto não é um link", "es": "esto no es un enlace", "zh": "這不是連結"},
+    "this is not a link": {"pt": "isto não é um link", "es": "esto no es un link", "zh": "這不是連結"},
     "this site is not supported": {"pt": "este site não é suportado", "es": "este sitio no es compatible", "zh": "不支援此網站"},
     "this video is private": {"pt": "este vídeo é privado", "es": "este video es privado", "zh": "這是私人影片"},
     "playlist is private or doesn't exist": {
@@ -167,7 +167,7 @@ ERRORS = {
     "no internet connection": {"pt": "sem conexão com a internet", "es": "sin conexión a internet", "zh": "沒有網路連線"},
     "connection timed out": {"pt": "a conexão expirou", "es": "se agotó el tiempo de conexión", "zh": "連線逾時"},
     "no match found on YouTube": {"pt": "nada encontrado no YouTube", "es": "no se encontró en YouTube", "zh": "在 YouTube 上找不到相符項目"},
-    "couldn't read this link": {"pt": "não foi possível ler este link", "es": "no se pudo leer este enlace", "zh": "無法讀取此連結"},
+    "couldn't read this link": {"pt": "não foi possível ler este link", "es": "no se pudo leer este link", "zh": "無法讀取此連結"},
     "this playlist is empty": {"pt": "esta playlist está vazia", "es": "esta lista está vacía", "zh": "這個播放清單是空的"},
     "no playable items found": {
         "pt": "nenhum item disponível encontrado",
@@ -186,7 +186,7 @@ ERRORS = {
     },
     "spotify: couldn't read this link": {
         "pt": "spotify: não foi possível ler este link",
-        "es": "spotify: no se pudo leer este enlace",
+        "es": "spotify: no se pudo leer este link",
         "zh": "spotify：無法讀取此連結",
     },
 }
