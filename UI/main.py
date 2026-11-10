@@ -10,6 +10,7 @@ import webbrowser
 
 from kivy.app import App
 from kivy.core.window import Window
+from kivy.effects.scroll import ScrollEffect
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.metrics import Metrics, dp
@@ -458,8 +459,14 @@ def quality_column():
     )
     column.bind(minimum_height=column.setter("height"))
 
-    # Bar shows only while scrolling
-    scroll = ScrollView(do_scroll_x=False, bar_inactive_color=(0, 0, 0, 0))
+    # Stops at the list ends
+    scroll = ScrollView(
+        do_scroll_x=False,
+        always_overscroll=False,
+        effect_cls=ScrollEffect,
+        # Bar shows only while scrolling
+        bar_inactive_color=(0, 0, 0, 0),
+    )
     scroll.add_widget(column)
     return scroll, column
 
