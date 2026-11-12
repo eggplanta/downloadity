@@ -28,6 +28,7 @@ from kivy.utils import escape_markup, platform
 
 from downloadity import downloader, library, updates
 from downloadity.download_queue import DownloadQueue, display_names
+from downloadity.formats import AUDIO_FORMATS, VIDEO_FORMATS, Formats
 from downloadity.media import CheckError, resolve_media, subset
 from downloadity.throttle import YoutubeBlockedError
 from ascii_art import RAMP, cover_markup
@@ -265,7 +266,7 @@ if platform == "android":
         Intent = autoclass("android.content.Intent")
         uri = autoclass("android.content.ContentUris").withAppendedId(videos, media_id)
         intent = Intent(Intent.ACTION_SEND)
-        intent.setType("video/mp4")
+        intent.setType("video/x-matroska" if path.endswith(".mkv") else "video/mp4")
         intent.putExtra(Intent.EXTRA_STREAM, cast("android.os.Parcelable", uri))
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         activity.startActivity(Intent.createChooser(intent, cast("java.lang.CharSequence", autoclass("java.lang.String")("share video"))))
@@ -679,7 +680,7 @@ class DownloadityApp(App):
     def check_link(self, url):
         media, error = None, None
         try:
-            media = resolve_media(url)
+            media = resolve_media(url, Formats(self.audio_format, self.video_format))
         except YoutubeBlockedError:
             error = t("blocked")
         except CheckError as e:
@@ -1088,28 +1089,40 @@ class DownloadityApp(App):
         inner = popup_width - 2 * POPUP_SIDE
         # Top pad offsets the title's spacing
         box = BoxLayout(orientation="vertical", spacing=dp(8), padding=[0, dp(7.5), 0, 0])
-        # Equal gaps center the language row
+        # Equal gaps center the rows
         box.add_widget(Widget())
 
-        # Label and choice kept together
-        language = t("language")
-        choice = escape_markup(f"[ {self.language_name(self.language_choice)} ]")
+        settings = (
+            (t("language"), self.language_name(self.language_choice), self.show_languages),
+            (t("audio_format"), self.audio_format.upper(), lambda: self.show_formats("audio")),
+            (t("video_format"), self.video_format.upper(), lambda: self.show_formats("video")),
+        )
+        labels = [label for label, _, _ in settings]
+        choices = [escape_markup(f"[ {choice} ]") for _, choice, _ in settings]
+
+        # Columns line up, long names shrink
         font = dp(15)
-        total = text_width(language, font) + dp(16) + text_width(choice, font)
-        # Long names shrink a little
+        total = max(map(lambda l: text_width(l, font), labels)) + dp(16) + max(map(lambda c: text_width(c, font), choices))
         if total > inner:
             font *= inner / total
-        label_width, choice_width = text_width(language, font), text_width(choice, font)
-        row = BoxLayout(
-            size_hint=(None, None),
-            size=(label_width + dp(16) + choice_width, dp(44)),
-            spacing=dp(16),
-            pos_hint={"center_x": 0.5},
-        )
-        row.add_widget(mono_label(language, font, size_hint_x=None, width=label_width))
-        picker = AsciiButton(choice, border=False, font_size=font, size_hint_x=None, width=choice_width)
-        row.add_widget(picker)
-        box.add_widget(row)
+        label_width = max(text_width(label, font) for label in labels)
+        choice_width = max(text_width(choice, font) for choice in choices)
+
+        pickers = []
+        for label, choice, (_, _, action) in zip(labels, choices, settings):
+            row = BoxLayout(
+                size_hint=(None, None),
+                size=(label_width + dp(16) + choice_width, dp(44)),
+                spacing=dp(16),
+                pos_hint={"center_x": 0.5},
+            )
+            text = mono_label(label, font, size_hint_x=None, width=label_width, halign="left")
+            text.bind(size=text.setter("text_size"))
+            row.add_widget(text)
+            picker = AsciiButton(choice, border=False, font_size=font, size_hint_x=None, width=choice_width)
+            row.add_widget(picker)
+            box.add_widget(row)
+            pickers.append((picker, action))
         box.add_widget(Widget())
 
         links = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(16))
@@ -1126,10 +1139,11 @@ class DownloadityApp(App):
         footer.add_widget(mono_label(f"v{APP_VERSION}", dp(12), color=GRAY, size_hint_y=None, height=dp(20)))
         box.add_widget(footer)
 
-        popup = AsciiPopup(t("settings"), None, body=box, height=dp(270), width=popup_width)
+        popup = AsciiPopup(t("settings"), None, body=box, height=dp(370), width=popup_width)
         popup.message.size_hint_y = None
         popup.message.height = dp(30)
-        picker.bind(on_release=lambda _b: (popup.dismiss(), self.show_languages()))
+        for picker, action in pickers:
+            picker.bind(on_release=lambda _b, a=action: (popup.dismiss(), a()))
         # Closed so it isn't stale
         for button in links.children:
             button.bind(on_release=lambda b: (popup.dismiss(), open_url(b.url)))
@@ -1159,6 +1173,51 @@ class DownloadityApp(App):
         self.apply_language()
         self.rebuild()
         self.show_settings()
+
+    def show_formats(self, kind):
+        current = self.audio_format if kind == "audio" else self.video_format
+        box = BoxLayout(orientation="vertical")
+        for choice in AUDIO_FORMATS if kind == "audio" else VIDEO_FORMATS:
+            name = choice.upper()
+            text = f"› {name} ‹" if choice == current else name
+            button = AsciiButton(escape_markup(text), border=False, font_size=dp(15))
+            button.bind(on_release=lambda _b, c=choice: self.choose_format(kind, c))
+            box.add_widget(button)
+
+        title = t("audio_format") if kind == "audio" else t("video_format")
+        rows = len(box.children)
+        popup = AsciiPopup(title, None, body=box, height=dp(110) + rows * dp(52), width=dp(340))
+        popup.message.size_hint_y = None
+        popup.message.height = dp(30)
+        popup.auto_dismiss = True
+        popup.open()
+
+    def choose_format(self, kind, choice):
+        for popup in [w for w in Window.children if isinstance(w, AsciiPopup)]:
+            popup.dismiss()
+        changed = choice != (self.audio_format if kind == "audio" else self.video_format)
+        self.save_settings(**{f"{kind}_format": choice})
+
+        # Checked link has old options
+        text = self.link_input.text
+        if changed and text.strip():
+            self.media = self.checked_media = None
+            self.on_text_change(self.link_input, text)
+
+        if changed and choice == "mkv":
+            AsciiPopup(t("mkv_warning"), [(t("ok"), self.show_settings)], closable=False).open()
+        else:
+            self.show_settings()
+
+    @property
+    def audio_format(self):
+        choice = self.load_settings().get("audio_format")
+        return choice if choice in AUDIO_FORMATS else Formats.audio
+
+    @property
+    def video_format(self):
+        choice = self.load_settings().get("video_format")
+        return choice if choice in VIDEO_FORMATS else Formats.video
 
     # Each name in its own language
     def language_name(self, choice):

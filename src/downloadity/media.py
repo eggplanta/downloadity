@@ -12,6 +12,7 @@ from spotify_scraper.errors import NotFoundError
 from . import extractor, spotify
 from .throttle import CHECK_ATTEMPTS, MAX_ATTEMPTS
 from .formats import (
+    Formats,
     PlaylistOptions,
     QualityOptions,
     build_playlist_options,
@@ -87,11 +88,12 @@ class Media:
     invalid: list[MediaEntry] = field(default_factory=list)
     playlist_id: Optional[str] = None
     samples: list[QualityOptions] = field(default_factory=list)
+    formats: Formats = Formats()
 
 
 # Main function
 
-def resolve_media(url: str) -> Media:
+def resolve_media(url: str, formats: Formats = Formats()) -> Media:
     """
     Validates the link and extracts it once
     Playlists only extract an evenly spaced sample
@@ -154,7 +156,7 @@ def resolve_media(url: str) -> Media:
 
     samples = _extract_samples(entries)
 
-    sampled = [build_quality_options(e.info) for e in samples if e.info]
+    sampled = [build_quality_options(e.info, formats) for e in samples if e.info]
     if not sampled:
         errors = [e.error for e in entries if e.error]
         raise CheckError(describe_error(errors[0]) if errors else "no playable items found")
@@ -177,6 +179,7 @@ def resolve_media(url: str) -> Media:
         invalid=[e for e in entries if e.invalid],
         playlist_id=playlist_id if is_playlist else None,
         samples=sampled,
+        formats=formats,
     )
 
 

@@ -186,7 +186,7 @@ class DownloadQueue:
             return None
 
     def _quality(self, entry: MediaEntry):
-        options = build_quality_options(entry.info)
+        options = build_quality_options(entry.info, self.media.formats)
         if self.audio_only:
             options.video = []
 
@@ -337,8 +337,9 @@ class DownloadQueue:
             return {"success": False}
 
         start, end = self.cut
-        name = free_name(self.output_dir, f"{base} [{cut_label(start)}-{cut_label(end)}]", ("mp4",))
-        output = os.path.join(self.output_dir, f"{name}.mp4")
+        ext = self.media.formats.video
+        name = free_name(self.output_dir, f"{base} [{cut_label(start)}-{cut_label(end)}]", (ext,))
+        output = os.path.join(self.output_dir, f"{name}.{ext}")
         success = cut_video(found[0], start, end, output, on_cut)
         os.remove(found[0])
         return {"success": success, "path": output}

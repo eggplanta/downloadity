@@ -1,20 +1,20 @@
 # Only what downloadity needs
 # Shared by the Android recipe and local test builds
 
-# Audio sources, converted to m4a
+# Audio sources, converted when needed
 decoder: aac aac_latm mp3 mp3float opus vorbis flac alac ac3 eac3
 decoder: pcm_s16le pcm_s16be pcm_s24le pcm_f32le pcm_u8
 
 # Video sources, decoded for cuts
 decoder: h264 hevc vp8 vp9 libdav1d mpeg4 mjpeg
 
-# m4a output, cut output, square covers
-encoder: libx264 aac mjpeg
+# Converted audio, cuts, square covers
+encoder: libx264 aac libmp3lame flac mjpeg
 
 demuxer: mov matroska mp3 aac ogg flac wav mpegts flv hls concat
 demuxer: ac3 eac3 h264 hevc m4v loas image2 mjpeg
 
-muxer: mp4 mov ipod matroska webm adts ogg image2 null
+muxer: mp4 mov ipod matroska webm adts ogg mp3 flac image2 null
 
 parser: aac aac_latm ac3 flac h264 hevc mpegaudio opus vorbis mjpeg
 parser: vp8 vp9 av1 mpeg4video

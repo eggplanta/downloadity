@@ -115,6 +115,14 @@ STRINGS = {
     # Settings
     "settings": {"en": "settings", "pt": "configurações", "es": "ajustes", "zh": "設定"},
     "language": {"en": "language", "pt": "idioma", "es": "idioma", "zh": "語言"},
+    "audio_format": {"en": "audio", "pt": "áudio", "es": "audio", "zh": "音訊"},
+    "video_format": {"en": "video", "pt": "vídeo", "es": "vídeo", "zh": "影片"},
+    "mkv_warning": {
+        "en": ".mkv files may not\nopen in some apps,\nlike the gallery\nor WhatsApp",
+        "pt": "arquivos .mkv podem\nnão abrir em alguns\napps, como a galeria\nou o WhatsApp",
+        "es": "los archivos .mkv\npueden no abrir en\nalgunas apps, como\nla galería o WhatsApp",
+        "zh": ".mkv 檔案可能無法\n在某些應用程式中開啟，\n例如相簿或 WhatsApp",
+    },
     "donate": {"en": "donate ♥", "pt": "doar ♥", "es": "donar ♥", "zh": "贊助 ♥"},
 
     # App updates

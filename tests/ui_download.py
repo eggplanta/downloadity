@@ -1,6 +1,8 @@
 """
 Drives the app: link -> quality -> confirm -> download -> OK
-Usage: ui_download.py url audio|video m4a|opus|mp3|height [shots name] [start end]
+Usage: ui_download.py url audio|video m4a|opus|mp3|flac|height [shots name] [start end]
+Audio takes the format's best quality
+CONTAINER=mp4|mkv picks the video format
 Start and end (min:sec) cut a single video
 REPEAT=all|new answers the known playlist popup
 Shots and files go to tests/output, per shots name
@@ -22,8 +24,10 @@ from main import t
 from downloadity.formats import VIDEO_MARGIN, VideoQuality, pick_quality
 
 URL, KIND, VALUE = sys.argv[1], sys.argv[2], sys.argv[3]
-# Audio is picked by codec
+# Audio is picked by format
 VALUE = int(VALUE) if VALUE.isdigit() else VALUE
+AUDIO_FORMAT = VALUE if KIND == "audio" else "m4a"
+VIDEO_FORMAT = os.environ.get("CONTAINER", "mp4")
 NAME = sys.argv[4] if len(sys.argv) > 4 else "single"
 CUT = sys.argv[5:7] if len(sys.argv) > 6 else None
 REPEAT = os.environ.get("REPEAT", "new")
@@ -31,7 +35,7 @@ SHOTS = paths.OUTPUT / "shots" / NAME
 SHOTS.mkdir(parents=True, exist_ok=True)
 main.DOWNLOAD_ROOT = str(paths.OUTPUT / "downloadity" / NAME)
 # English, and the real settings untouched
-main.DownloadityApp.load_settings = lambda self: {"language": "en"}
+main.DownloadityApp.load_settings = lambda self: {"language": "en", "audio_format": AUDIO_FORMAT, "video_format": VIDEO_FORMAT}
 main.DownloadityApp.save_settings = lambda self, **values: None
 
 app = main.DownloadityApp()
@@ -110,7 +114,8 @@ def repeat(dt):
 def choose_quality(dt):
     media = app.media
     log(f"downloading {len(media.entries)} items")
-    quality = pick_quality(getattr(media.options, KIND), VALUE)
+    qualities = getattr(media.options, KIND)
+    quality = max(qualities, key=lambda q: q.value) if KIND == "audio" else pick_quality(qualities, VALUE)
     state["estimate"] = None if CUT else shown_size(quality)
     app.on_quality_select(KIND, quality)
     Clock.schedule_once(confirm, 0.5)

@@ -10,6 +10,8 @@ from .formats import AudioQuality, VideoQuality
 
 # Android points this at the bundled binary
 FFMPEG = "ffmpeg"
+# Parallel pieces, same bytes
+FRAGMENT_WORKERS = 4
 # Work files stay here until done
 TEMP_DIR = None
 
@@ -41,17 +43,22 @@ def download_audio(
             "fragment": lambda n: min(2 ** (n - 1), 20),
         },
 
+        "concurrent_fragment_downloads": FRAGMENT_WORKERS,
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": quality.codec,
-                "preferredquality": str(quality.bitrate),
+                # Lossless has no bitrate
+                "preferredquality": str(quality.bitrate) if quality.bitrate else None,
             }
         ],
     }
     # Bundled ffmpeg names this muxer ogg
     if quality.codec == "opus":
         options["postprocessor_args"] = {"extractaudio": ["-f", "ogg"]}
+    # CD depth, lossy sources need no more
+    if quality.codec == "flac":
+        options["postprocessor_args"] = {"extractaudio": ["-sample_fmt", "s16"]}
     if on_postprocess:
         options["postprocessor_hooks"] = [on_postprocess]
 
@@ -81,7 +88,10 @@ def download_video(
         "format": quality.download_format_id,
         "outtmpl": outtmpl,
         "overwrites": overwrite,
-        "merge_output_format": "mp4",
+        "merge_output_format": quality.container,
+        "concurrent_fragment_downloads": FRAGMENT_WORKERS,
+        # Single files need the container too
+        "postprocessors": [{"key": "FFmpegVideoRemuxer", "preferedformat": quality.container}],
 
         "retries": 3,
         "fragment_retries": 3,
@@ -108,8 +118,9 @@ def cut_video(source: str, start: float, end: float, output: str, on_progress=No
     command = [
         FFMPEG, "-y", "-v", "error", "-nostats",
         "-ss", str(start), "-t", str(length), "-i", source,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "160k",
+        # Visually lossless, still fast
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "17", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",
         "-progress", "pipe:1",
         output,

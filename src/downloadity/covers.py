@@ -10,7 +10,8 @@ import urllib.request
 from typing import Optional
 
 import certifi
-from mutagen.flac import Picture
+from mutagen.flac import FLAC, Picture
+from mutagen.id3 import APIC, ID3, TALB, TDRC, TIT2, TPE1, TRCK
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.oggopus import OggOpus
 
@@ -21,6 +22,8 @@ FRONT_COVER = 3
 WIDE_RATIO = 16 / 9
 # Tag name -> MP4 atom
 M4A_KEYS = {"title": "\xa9nam", "artist": "\xa9ART", "album": "\xa9alb", "date": "\xa9day"}
+# Tag name -> ID3 frame
+MP3_FRAMES = {"title": TIT2, "artist": TPE1, "album": TALB, "date": TDRC, "tracknumber": TRCK}
 YOUTUBE_THUMBS = ("maxresdefault", "hq720", "sddefault", "hqdefault")
 # 4:3 thumbnails hide bars above and below
 SQUARE_CROP = "crop=if(eq(iw*3\\,ih*4)\\,ih*3/4\\,min(iw\\,ih)):if(eq(iw*3\\,ih*4)\\,ih*3/4\\,min(iw\\,ih))"
@@ -62,6 +65,10 @@ def embed_tags(path: str, cover: Optional[bytes], tags: dict) -> None:
     """
     if path.endswith(".opus"):
         _embed_opus(path, cover, tags)
+    elif path.endswith(".mp3"):
+        _embed_mp3(path, cover, tags)
+    elif path.endswith(".flac"):
+        _embed_flac(path, cover, tags)
     else:
         _embed_m4a(path, cover, tags)
 
@@ -127,11 +134,34 @@ def _embed_m4a(path: str, cover: Optional[bytes], tags: dict) -> None:
 def _embed_opus(path: str, cover: Optional[bytes], tags: dict) -> None:
     audio = OggOpus(path)
     if cover:
-        picture = Picture()
-        picture.type = FRONT_COVER
-        picture.mime = "image/jpeg"
-        picture.data = cover
-        audio["metadata_block_picture"] = [base64.b64encode(picture.write()).decode("ascii")]
+        audio["metadata_block_picture"] = [base64.b64encode(_picture(cover).write()).decode("ascii")]
     for key, value in tags.items():
         audio[key] = [value]
     audio.save()
+
+
+def _embed_flac(path: str, cover: Optional[bytes], tags: dict) -> None:
+    audio = FLAC(path)
+    if cover:
+        audio.clear_pictures()
+        audio.add_picture(_picture(cover))
+    for key, value in tags.items():
+        audio[key] = [value]
+    audio.save()
+
+
+def _embed_mp3(path: str, cover: Optional[bytes], tags: dict) -> None:
+    audio = ID3()
+    if cover:
+        audio.add(APIC(encoding=3, mime="image/jpeg", type=FRONT_COVER, desc="", data=cover))
+    for key, value in tags.items():
+        audio.add(MP3_FRAMES[key](encoding=3, text=[str(value)]))
+    audio.save(path)
+
+
+def _picture(cover: bytes) -> Picture:
+    picture = Picture()
+    picture.type = FRONT_COVER
+    picture.mime = "image/jpeg"
+    picture.data = cover
+    return picture

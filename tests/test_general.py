@@ -1,6 +1,7 @@
 """
 Downloads a link from the terminal, like the app
-Usage: test_general.py [url] [audio|video] [m4a|opus|mp3|height]
+Usage: test_general.py [url] [audio|video] [format] [bitrate|height]
+Formats: m4a opus mp3 flac, mp4 mkv
 Files go to tests/output/downloadity
 """
 import sys
@@ -8,25 +9,27 @@ from time import perf_counter
 
 import paths
 from downloadity.download_queue import DownloadQueue
+from downloadity.formats import Formats
 from downloadity.media import resolve_media
 
 args = sys.argv[1:]
 url = args[0] if args else input("Paste the link: ")
+kind = args[1] if len(args) > 1 else input("audio or video? ")
+choice = args[2] if len(args) > 2 else input("format: ")
+formats = Formats(audio=choice) if kind == "audio" else Formats(video=choice)
 
 start = perf_counter()
-media = resolve_media(url)
+media = resolve_media(url, formats)
 if media is None:
     raise SystemExit("Invalid link")
 print(f"validated in {perf_counter() - start:.1f}s")
 
-for kind in ("audio", "video"):
-    labels = [f"{q.label} ({q.filesize_label})" for q in getattr(media.options, kind)]
-    print(f"{kind}: {', '.join(labels) or '-'}")
+qualities = getattr(media.options, kind)
+print(f"{kind}: {', '.join(f'{q.label} ({q.filesize_label})' for q in qualities) or '-'}")
 
-kind = args[1] if len(args) > 1 else input("\naudio or video? ")
-value = args[2] if len(args) > 2 else input("codec or height: ")
-# Audio is picked by codec
-value = int(value) if value.isdigit() else value
+value = args[3] if len(args) > 3 else input("bitrate or height (empty = best): ")
+# Empty picks the best
+value = int(value) if value else max(q.value for q in qualities)
 
 
 class Printer:

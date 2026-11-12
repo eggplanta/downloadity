@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 license = "GPL-3.0-or-later"
 authors = [
-    { name = "eggplanta" }
+    { name = "Dspavier" }
 ]
 dependencies = [
     "yt-dlp",

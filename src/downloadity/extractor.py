@@ -130,88 +130,57 @@ def _language_rank(fmt: dict) -> int:
 
 def _get_audio_formats(formats: list, duration) -> list:
     """
-    Best Opus and best M4A
-    Other codecs are converted to M4A
+    Every audio-only format
+    formats.py picks per user choice
     """
-    best_by_codec = {}
-
-    for fmt in formats:
-        if fmt.get("vcodec") != "none" or not fmt.get("abr"):
-            continue
-
-        codec = _audio_codec(fmt)
-        existing = best_by_codec.get(codec)
-        if existing is None or _audio_rank(fmt) > _audio_rank(existing):
-            best_by_codec[codec] = fmt
-
     return [
         {
             "format_id": fmt.get("format_id"),
+            "abr": fmt["abr"],
             "bitrate": _standard_bitrate(fmt["abr"]),
             "filesize": _filesize(fmt, duration),
-            "codec": codec,
-            "native": _is_native(fmt),
+            "codec": _audio_codec(fmt),
+            "drc": bool(fmt.get("has_drc") or "drc" in str(fmt.get("format_id"))),
         }
-        for codec, fmt in best_by_codec.items()
+        for fmt in formats
+        if fmt.get("vcodec") == "none" and fmt.get("abr")
     ]
 
 
 def _audio_codec(fmt: dict) -> str:
-    return "opus" if "opus" in (fmt.get("acodec") or "") else "m4a"
-
-
-def _is_native(fmt: dict) -> bool:
-    return (fmt.get("acodec") or "").startswith(("opus", "mp4a"))
-
-
-def _audio_rank(fmt: dict) -> tuple:
-    native = _is_native(fmt)
-    drc = fmt.get("has_drc") or "drc" in str(fmt.get("format_id"))
-    return (native, not drc, fmt["abr"])
+    # Other codecs always get converted
+    acodec = fmt.get("acodec") or ""
+    for prefix, codec in (("opus", "opus"), ("mp4a", "m4a"), ("mp3", "mp3"), ("flac", "flac")):
+        if acodec.startswith(prefix):
+            return codec
+    return "other"
 
 
 def _get_video_formats(formats: list, duration) -> list:
-
-    best_by_height = {}
-
-    for fmt in formats:
-        if fmt.get("vcodec") == "none":
-            continue
-
-        if not fmt.get("height") or fmt["height"] < 144:
-            continue
-
-        height = _standard_height(fmt)
-
-        # Prefer compatible codecs, then known sizes
-        existing = best_by_height.get(height)
-        if existing is None or _video_rank(fmt) > _video_rank(existing):
-            best_by_height[height] = fmt
-
-    result = []
-    for height in sorted(best_by_height):
-        fmt = best_by_height[height]
-        result.append({
+    """
+    Every video format, heights standardized
+    """
+    return [
+        {
             "format_id": fmt.get("format_id"),
-            "height": height,
+            "height": _standard_height(fmt),
+            "codec": _video_codec(fmt),
+            "tbr": fmt.get("tbr") or 0,
+            "hls": "m3u8" in (fmt.get("protocol") or ""),
             "has_audio": fmt.get("acodec") != "none",
             "filesize": _filesize(fmt, duration),
-        })
-
-    return result
-
-
-def _video_rank(fmt: dict) -> tuple:
-    known_size = bool(fmt.get("filesize") or fmt.get("filesize_approx"))
-    return (_video_codec_rank(fmt), known_size, fmt.get("tbr") or 0)
+        }
+        for fmt in formats
+        if fmt.get("vcodec") != "none" and fmt.get("height") and fmt["height"] >= 144
+    ]
 
 
-def _video_codec_rank(fmt: dict) -> int:
-    # H.264 first, it plays everywhere
-    codec = fmt.get("vcodec") or ""
-    if codec.startswith(("avc1", "h264")):
-        return 2
-    return 1 if codec.startswith(("vp9", "vp09")) else 0
+def _video_codec(fmt: dict) -> str:
+    vcodec = fmt.get("vcodec") or ""
+    for prefixes, codec in ((("avc1", "h264"), "avc"), (("vp9", "vp09"), "vp9"), (("av01",), "av1"), (("hev", "hvc", "h265"), "hevc")):
+        if vcodec.startswith(prefixes):
+            return codec
+    return "other"
 
 
 def _standard_bitrate(abr: float) -> int:
