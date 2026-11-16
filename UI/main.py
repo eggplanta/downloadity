@@ -1370,6 +1370,9 @@ class DownloadityApp(App):
             popup.dismiss()
         self.reset_home()
         self.link_input.text = url
+        # Drop stale scroll from longer link
+        self.link_input.scroll_x = 0
+        self.link_input.cursor = self.link_input.get_cursor_from_index(len(url))
 
     # Updates (worker thread)
 
