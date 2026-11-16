@@ -19,7 +19,8 @@ fullscreen = 0
 android.permissions = INTERNET,FOREGROUND_SERVICE,FOREGROUND_SERVICE_DATA_SYNC,POST_NOTIFICATIONS,WAKE_LOCK,REQUEST_INSTALL_PACKAGES
 services = Keepalive:service.py:foreground:foregroundServiceType=dataSync
 android.add_src = android_src
-android.add_resources = android_res/values-v29/theme.xml:values-v29/theme.xml
+android.add_resources = android_res/values-v29/theme.xml:values-v29/theme.xml,android_res/drawable/ic_done.xml:drawable/ic_done.xml
+android.manifest.intent_filters = android_res/share_filter.xml
 presplash.filename = android_res/presplash.jpg
 android.presplash_color = #000000
 p4a.extra_args = --native-service=io.github.eggplanta.downloadity.DownloadAnchor

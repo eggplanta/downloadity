@@ -111,6 +111,28 @@ STRINGS = {
     "downloading": {"en": "downloading", "pt": "baixando", "es": "descargando", "zh": "下載中"},
     "downloading_name": {"en": 'downloading "{name}"', "pt": 'baixando "{name}"', "es": 'descargando "{name}"', "zh": "正在下載「{name}」"},
     "downloads_channel": {"en": "downloads", "pt": "downloads", "es": "descargas", "zh": "下載"},
+    "notify_done": {"en": "download finished!", "pt": "download concluído!", "es": "¡descarga completa!", "zh": "下載完成！"},
+    "notify_failed": {"en": "download failed", "pt": "o download falhou", "es": "la descarga falló", "zh": "下載失敗"},
+    "notify_files": {
+        "en": ("{name} · {n} file", "{name} · {n} files"),
+        "pt": ("{name} · {n} arquivo", "{name} · {n} arquivos"),
+        "es": ("{name} · {n} archivo", "{name} · {n} archivos"),
+        "zh": ("{name} · {n} 個檔案", "{name} · {n} 個檔案"),
+    },
+    "notify_partial": {
+        "en": ("{name} · {done} of {total}, {n} failed", "{name} · {done} of {total}, {n} failed"),
+        "pt": ("{name} · {done} de {total}, {n} falhou", "{name} · {done} de {total}, {n} falharam"),
+        "es": ("{name} · {done} de {total}, {n} falló", "{name} · {done} de {total}, {n} fallaron"),
+        "zh": ("{name} · {done}/{total}，{n} 個失敗", "{name} · {done}/{total}，{n} 個失敗"),
+    },
+
+    # Shared links
+    "share_busy": {
+        "en": "wait for the current\ndownload to finish",
+        "pt": "espere o download\natual terminar",
+        "es": "espera a que termine\nla descarga actual",
+        "zh": "請等待目前的\n下載完成",
+    },
 
     # Settings
     "settings": {"en": "settings", "pt": "configurações", "es": "ajustes", "zh": "設定"},

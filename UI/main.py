@@ -97,6 +97,9 @@ BACK_KEY = 27
 # Background time before starting over
 RESTART_AFTER = 10 * 60
 SERVICE_ID = 1
+DONE_ID = 2
+# First link in shared text
+URL_PATTERN = re.compile(r"https?://\S+")
 PROGRESS_CHANNEL = "downloads"
 
 if platform == "android":
@@ -222,30 +225,64 @@ if platform == "android":
         from android.permissions import Permission, request_permissions
         request_permissions([Permission.POST_NOTIFICATIONS])
 
-    def show_progress(position, total, label):
-        # Same id replaces the service notification
+    def notification_manager():
         Context = autoclass("android.content.Context")
-        Notification = autoclass("android.app.Notification$Builder")
         Channel = autoclass("android.app.NotificationChannel")
         manager = activity.getSystemService(Context.NOTIFICATION_SERVICE)
+        # Low importance, silent
         importance = autoclass("android.app.NotificationManager").IMPORTANCE_LOW
         manager.createNotificationChannel(Channel(PROGRESS_CHANNEL, t("downloads_channel"), importance))
+        return manager
 
+    def notification(title, text, icon=None):
+        # Tapping opens the app
         Intent = autoclass("android.content.Intent")
         PendingIntent = autoclass("android.app.PendingIntent")
+        String = autoclass("java.lang.String")
         flags = PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
         opening = PendingIntent.getActivity(activity, 0, Intent(activity, activity.getClass()), flags)
 
-        text = autoclass("java.lang.String")(f"{position} / {total}")
-        builder = Notification(activity, PROGRESS_CHANNEL)
-        builder.setContentTitle(cast("java.lang.CharSequence", autoclass("java.lang.String")(label)))
-        builder.setContentText(cast("java.lang.CharSequence", text))
-        builder.setSmallIcon(activity.getApplicationInfo().icon)
+        builder = autoclass("android.app.Notification$Builder")(activity, PROGRESS_CHANNEL)
+        builder.setContentTitle(cast("java.lang.CharSequence", String(title)))
+        builder.setContentText(cast("java.lang.CharSequence", String(text)))
+        builder.setSmallIcon(icon or activity.getApplicationInfo().icon)
         builder.setContentIntent(opening)
+        return builder
+
+    def show_progress(position, total, label):
+        # Same id replaces the service notification
+        manager = notification_manager()
+        builder = notification(label, f"{position} / {total}")
         builder.setOngoing(True)
         builder.setOnlyAlertOnce(True)
         builder.setProgress(total, position, False)
         manager.notify(SERVICE_ID, builder.build())
+
+    def show_done(title, text):
+        # Posted after the service stops
+        manager = notification_manager()
+        icon = activity.getResources().getIdentifier("ic_done", "drawable", activity.getPackageName())
+        builder = notification(title, text, icon)
+        builder.setAutoCancel(True)
+        manager.notify(DONE_ID, builder.build())
+
+    def hide_done():
+        notification_manager().cancel(DONE_ID)
+
+    def shared_text(intent):
+        Intent = autoclass("android.content.Intent")
+        if intent is None or intent.getAction() != Intent.ACTION_SEND:
+            return None
+        return intent.getStringExtra(Intent.EXTRA_TEXT)
+
+    def listen_shares(callback):
+        """
+        Shares reaching a running app
+        Returns the one that launched it
+        """
+        from android import activity as android_activity
+        android_activity.bind(on_new_intent=lambda intent: callback(shared_text(intent)))
+        return shared_text(activity.getIntent())
 
     def scan_file(path):
         # New files stay hidden until scanned
@@ -282,6 +319,15 @@ else:
 
     def show_progress(position, total, label):
         pass
+
+    def show_done(title, text):
+        pass
+
+    def hide_done():
+        pass
+
+    def listen_shares(callback):
+        return None
 
     def scan_file(path):
         pass
@@ -363,12 +409,37 @@ def bar_markup(fraction, cols):
         f"[color=#555555]{'─' * rest}[/color]"
     )
 
-def download_label(media):
+def media_name(media):
     # Playlist name, else the song
     name = media.title and re.sub(r" \[[^\]]+\]$", "", media.title)
     if not name and media.entries:
         name = display_names(media.entries[0])[0]
+    return name
+
+
+def download_label(media):
+    name = media_name(media)
     return t("downloading_name", name=name) if name else t("downloading")
+
+
+def shared_url(text):
+    found = URL_PATTERN.search(text or "")
+    return found and found.group().rstrip(".,;:!?)]}\"'")
+
+
+def finished_notice(media, done, failed, error=None):
+    """
+    Title and text when minimized
+    """
+    name = media_name(media) or ""
+    if error or not done:
+        return t("notify_failed"), name
+    if not media.is_playlist:
+        return t("notify_done"), name
+    if failed:
+        total = done + len(failed)
+        return t("notify_done"), t("notify_partial", n=len(failed), name=name, done=done, total=total)
+    return t("notify_done"), t("notify_files", n=done, name=name)
 
 def mono_label(text, font_size, **kwargs):
     kwargs.setdefault("halign", "center")
@@ -649,6 +720,7 @@ class AsciiPopup(ModalView):
 class DownloadityApp(App):
     pending_apk = None
     paused_at = None
+    paused = False
     updating = False
 
     def on_text_change(self, instance, value):
@@ -953,16 +1025,21 @@ class DownloadityApp(App):
         threading.Thread(target=self.run_queue, args=(queue,), daemon=True).start()
 
     def run_queue(self, queue):
+        self.outcome = (0, [], None)
         try:
             queue.run()
         except Exception as e:
             updates.report(e)
             error = str(e)
+            self.outcome = (0, [], error)
             Clock.schedule_once(lambda dt: self.show_finished(0, [], queue.output_dir, error))
         finally:
             # UI thread sleeps while minimized
             self.ended_at = time.monotonic()
             keep_alive(False)
+            # Progress gone, done notice instead
+            if self.paused:
+                show_done(*finished_notice(self.media, *self.outcome))
 
     def make_art(self, entry):
         info = entry.info["ytdlp_info"]
@@ -1001,6 +1078,7 @@ class DownloadityApp(App):
         Clock.schedule_once(lambda dt: self.draw_bar(fraction))
 
     def on_finished(self, done, failed, folder):
+        self.outcome = (done, failed, None)
         Clock.schedule_once(lambda dt: self.show_finished(done, failed, folder))
 
     # Player screen
@@ -1267,6 +1345,31 @@ class DownloadityApp(App):
         if platform == "android":
             updates.confirm()
             threading.Thread(target=self.check_updates, daemon=True).start()
+        # Opened from another app's share
+        self.receive_shared(listen_shares(self.receive_shared))
+
+    # Shared links
+
+    def receive_shared(self, text):
+        """
+        Any thread, before on_resume
+        """
+        url = shared_url(text)
+        if not url:
+            return
+        # Never restart over a share
+        self.paused_at = None
+        Clock.schedule_once(lambda dt: self.paste_shared(url))
+
+    def paste_shared(self, url):
+        if self.screens.current == "downloading" and self.ended_at is None:
+            AsciiPopup(t("share_busy"), [(t("ok"), lambda: None)]).open()
+            return
+
+        for popup in [w for w in Window.children if isinstance(w, AsciiPopup)]:
+            popup.dismiss()
+        self.reset_home()
+        self.link_input.text = url
 
     # Updates (worker thread)
 
@@ -1320,9 +1423,12 @@ class DownloadityApp(App):
 
     def on_pause(self):
         self.paused_at = time.time()
+        self.paused = True
         return True
 
     def on_resume(self):
+        self.paused = False
+        hide_done()
         # Back from the permission screen
         apk, self.pending_apk = self.pending_apk, None
         if apk:
