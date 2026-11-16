@@ -1172,8 +1172,8 @@ class DownloadityApp(App):
 
         settings = (
             (t("language"), self.language_name(self.language_choice), self.show_languages),
-            (t("audio_format"), self.audio_format.upper(), lambda: self.show_formats("audio")),
-            (t("video_format"), self.video_format.upper(), lambda: self.show_formats("video")),
+            (t("audio_format"), f".{self.audio_format}", lambda: self.show_formats("audio")),
+            (t("video_format"), f".{self.video_format}", lambda: self.show_formats("video")),
         )
         labels = [label for label, _, _ in settings]
         choices = [escape_markup(f"[ {choice} ]") for _, choice, _ in settings]
@@ -1256,7 +1256,7 @@ class DownloadityApp(App):
         current = self.audio_format if kind == "audio" else self.video_format
         box = BoxLayout(orientation="vertical")
         for choice in AUDIO_FORMATS if kind == "audio" else VIDEO_FORMATS:
-            name = choice.upper()
+            name = f".{choice}"
             text = f"› {name} ‹" if choice == current else name
             button = AsciiButton(escape_markup(text), border=False, font_size=dp(15))
             button.bind(on_release=lambda _b, c=choice: self.choose_format(kind, c))
@@ -1539,16 +1539,22 @@ class DownloadityApp(App):
         home = Screen(name="home")
         home.add_widget(self.build_home())
         # Floats, home layout stays put
-        settings = AsciiButton(
-            "⚙",
-            border=False,
-            font_size=dp(34),
-            size_hint=(None, None),
-            size=(dp(64), dp(64)),
-        )
+        settings = BoxLayout(size_hint=(None, None), size=(dp(44), dp(64)))
+        gear = AsciiButton("⚙", border=False, font_size=dp(34), size_hint_x=None, width=dp(44))
+        # Separate, CJK font lacks the gear
+        label = AsciiButton(escape_markup(t("settings")), border=False, font_size=dp(13), size_hint_x=None)
+
+        # Label hugs its text
+        def fit_label(_label, texture_size):
+            label.width = texture_size[0] + dp(4)
+            settings.width = gear.width + label.width
+
+        label.text_label.bind(texture_size=fit_label)
+        for button in (gear, label):
+            button.bind(on_release=self.show_settings)
+            settings.add_widget(button)
         # Slightly off the corner
-        home.bind(size=lambda screen, size: setattr(settings, "pos", (size[0] - dp(72), size[1] - dp(72))))
-        settings.bind(on_release=self.show_settings)
+        home.bind(size=lambda screen, size: setattr(settings, "pos", (dp(8), size[1] - dp(72))))
         home.add_widget(settings)
         self.screens.add_widget(home)
 
@@ -1837,6 +1843,14 @@ class DownloadityApp(App):
             height=dp(30),
         )
         root.add_widget(self.qualities_status)
+
+        root.add_widget(mono_label(
+            t("formats_moved"),
+            dp(12),
+            color=(0.6, 0.6, 0.6, 1),
+            size_hint_y=None,
+            height=dp(36),
+        ))
 
         return root
 

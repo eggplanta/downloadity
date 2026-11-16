@@ -126,6 +126,13 @@ STRINGS = {
         "zh": ("{name} · {done}/{total}，{n} 個失敗", "{name} · {done}/{total}，{n} 個失敗"),
     },
 
+    "formats_moved": {
+        "en": "format choice moved to\nsettings on the home screen",
+        "pt": "a escolha de formato foi movida\npara configurações, na tela inicial",
+        "es": "la elección de formato se movió\na ajustes, en la pantalla de inicio",
+        "zh": "格式選擇已移至\n首頁的設定",
+    },
+
     # Shared links
     "share_busy": {
         "en": "wait for the current\ndownload to finish",
